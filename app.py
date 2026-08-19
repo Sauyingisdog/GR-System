@@ -1,0 +1,341 @@
+import streamlit as st
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+import re
+import os
+import io
+import textwrap
+from PIL import Image, ImageDraw, ImageFont
+import gspread
+from google.oauth2.service_account import Credentials
+import json
+
+# ==========================================
+# 🔒 系統登入密碼鎖
+# ==========================================
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == st.secrets["app_password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"] 
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.text_input("🔒 請輸入 Gold Racing 系統登入密碼", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("❌ 密碼錯誤，請重新輸入", type="password", on_change=password_entered, key="password")
+        return False
+    return True
+
+if not check_password():
+    st.stop()
+
+# ==========================================
+# ⚙️ 系統主程式
+# ==========================================
+st.set_page_config(page_title="Gold Racing 雲端出圖系統", layout="wide")
+st.title("🏇 Gold Racing 全自動出圖系統 (雲端自動 Sorting 版)")
+
+SHEET_ID = "18rGJUuOoN33z7ZOIc7lVwdGinjAu7aMH988VAuKznD4" 
+
+def get_gsheets_client():
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds_info = json.loads(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_info, scopes=scope)
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"❌ 無法連接 Google Sheets！請檢查 Secrets 設定。\n詳細錯誤: {e}")
+        return None
+
+def clean_rating(rating_str):
+    num = re.sub(r'\D', '', str(rating_str))
+    return int(num) if num else 0
+
+def clean_weight(weight_str):
+    num = re.sub(r'\D', '', str(weight_str))
+    return int(num) if num else 0
+
+def fetch_and_push_to_gsheets(date_str, client):
+    url = f"https://racing.hkjc.com/Racing/Info/MCS/Chinese/racing/prerace/dstr/{date_str}_S20000_S_DSTR.xml.zip"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        response.encoding = 'utf-8'
+        html_content = response.text
+        
+        if "<table" not in html_content: return "伺服器回傳內容冇表格。"
+        soup = BeautifulSoup(html_content, 'html.parser')
+        races = soup.find_all('div', class_='sectionBg')
+        if not races: return "搵唔到賽事資料。"
+
+        spreadsheet = client.open_by_key(SHEET_ID)
+        processed_races = []
+
+        for race in races:
+            title_element = race.find('h3', class_='raceInfo')
+            if not title_element: continue
+            
+            title_text = title_element.get_text(separator=' ')
+            race_num_match = re.search(r'第 (\d+) 場', title_text)
+            if not race_num_match: continue
+            race_num = f"R{race_num_match.group(1)}"
+            
+            table = race.find('table', class_='tbRace')
+            if not table: continue
+            
+            rows = table.find_all('tr')[1:] 
+            horses = []
+            for row in rows:
+                if "退出" in row.get_text(): continue
+                cols = row.find_all('td')
+                if len(cols) >= 8:
+                    match = re.search(r'\d+', cols[0].text.strip())
+                    if match:
+                        horses.append({
+                            'no': match.group(),
+                            'name': cols[1].text.strip(),
+                            'actual_weight': clean_weight(cols[5].text.strip()),
+                            'rating': clean_rating(cols[7].text.strip())
+                        })
+            if not horses: continue
+
+            try:
+                worksheet = spreadsheet.worksheet(race_num)
+                worksheet.clear()
+            except gspread.exceptions.WorksheetNotFound:
+                worksheet = spreadsheet.add_worksheet(title=race_num, rows="40", cols="15")
+
+            is_handicap = "讓賽" in title_text
+            max_rating = max([h['rating'] for h in horses]) if horses else 0
+            min_weight = min([h['actual_weight'] for h in horses]) if horses else 0
+            top_rating_horses = [h for h in horses if h['rating'] == max_rating]
+            base_weight = top_rating_horses[0]['actual_weight'] if top_rating_horses else 0
+            
+            # 建立大表格：左邊係入分區 (A-F)，中間隔一條空欄 (G)，右邊係展示區 (H-M)
+            # 先準備好一個夠闊嘅 2D List
+            sheet_data = [["" for _ in range(13)] for _ in range(len(horses) + 10)]
+            
+            # 第一行表頭
+            headers = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
+            for i, h in enumerate(headers):
+                sheet_data[0][i] = h + " (入分區)"
+                sheet_data[0][i+7] = h + " (自動排序展示區)" # H到M欄
+
+            # 填寫左邊入分區 (A-F)
+            for idx, h in enumerate(horses):
+                row = idx + 1
+                row_idx = row + 1 # Excel 列號 (從1開始)
+                sheet_data[row][0] = f"{h['no']}. {h['name']}"
+                sheet_data[row][1] = "" # 預留畀你入分
+                
+                if is_handicap:
+                    c_col = h['rating']
+                    e_col = (base_weight - (max_rating - h['rating'])) - h['actual_weight']
+                else:
+                    c_col = 115 if max_rating > 115 else 100
+                    e_col = min_weight - h['actual_weight']
+                
+                sheet_data[row][2] = c_col
+                sheet_data[row][3] = f"=B{row_idx}-C{row_idx}"
+                sheet_data[row][4] = e_col
+                sheet_data[row][5] = f"=D{row_idx}+E{row_idx}"
+
+            # 喺右邊 (H2) 放入 =SORT 公式
+            last_horse_row = len(horses) + 1
+            # 公式意思：將 A2:F 範圍嘅資料，根據第 6 欄 (知舍優勢) 由大至小 (FALSE) 排列
+            sheet_data[1][7] = f"=SORT(A2:F{last_horse_row}, 6, FALSE)"
+
+            # 喺右邊最下方加入評語區
+            comment_start_row = last_horse_row + 1
+            sheet_data[comment_start_row][7] = "--- 評語區 ---"
+            sheet_data[comment_start_row+1][7] = "No Bet 指數 (請填入右方格):"
+            sheet_data[comment_start_row+2][7] = "徒弟的話 (請填入右方格):"
+
+            # 更新上 Sheet
+            worksheet.update('A1', sheet_data, value_input_option='USER_ENTERED')
+            
+            # 美化排版：凍結表頭、自動調闊度
+            worksheet.freeze(rows=1)
+            worksheet.columns_auto_resize(1, 1) # A欄
+            worksheet.columns_auto_resize(8, 8) # H欄
+            
+            processed_races.append(race_num)
+            
+        return f"成功同步 {len(processed_races)} 場賽事至 Google Sheets！"
+    except Exception as e:
+        return f"發生錯誤: {e}"
+
+def fetch_from_gsheets(client, race_num):
+    try:
+        spreadsheet = client.open_by_key(SHEET_ID)
+        worksheet = spreadsheet.worksheet(race_num)
+        # 讀取整個 Sheet 嘅數值
+        data = worksheet.get_all_values(value_render_option='UNFORMATTED_VALUE')
+        
+        if not data: return None, None, None, "找不到數據"
+            
+        # 尋找右邊 (H欄，index=7) 嘅 "--- 評語區 ---"
+        split_idx = -1
+        for i, row in enumerate(data):
+            if len(row) > 7 and row[7] == "--- 評語區 ---":
+                split_idx = i
+                break
+                
+        if split_idx == -1:
+            return None, None, None, "找不到評語區，請確保雲端表格格式正確。"
+            
+        # 抽取右邊 (H到M欄，index 7-12) 嘅排序後馬匹數據
+        horse_data = []
+        for i in range(1, split_idx): # 從第二行開始，到評語區之上
+            if len(data[i]) > 7 and str(data[i][7]).strip() != "":
+                 horse_data.append(data[i][7:13])
+                 
+        # 手動定義表頭
+        headers = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
+        df = pd.DataFrame(horse_data, columns=headers)
+        
+        # 轉換數字格式
+        for col in ['預計評分', '標準分', '優勢', '調整評分', '知舍優勢']:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            
+        # 讀取評語 (I欄，index=8)
+        no_bet_val = str(data[split_idx+1][8]) if len(data[split_idx+1]) > 8 else ""
+        comment_val = str(data[split_idx+2][8]) if len(data[split_idx+2]) > 8 else ""
+        
+        return df, no_bet_val, comment_val, "成功"
+    except Exception as e:
+        return None, None, None, str(e)
+
+def draw_image(template_path, df_data, race_title, no_bet_text, comment_text):
+    image = Image.open(template_path).convert("RGB")
+    draw = ImageDraw.Draw(image)
+    
+    font_filename = "LXGWWenKaiTC-Bold.ttf" 
+    try:
+        font_main = ImageFont.truetype(font_filename, 20)      
+        font_header = ImageFont.truetype(font_filename, 18)    
+        font_no_bet = ImageFont.truetype(font_filename, 42)    
+    except:
+        font_main = ImageFont.load_default()
+        font_header = ImageFont.load_default()
+        font_no_bet = ImageFont.load_default()
+
+    # 因為 Google Sheet 已經排好，所以唔使再 sort_values，確保原汁原味
+    sorted_df = df_data.copy()
+    total_horses = len(sorted_df)
+
+    draw.text((55, 1010), no_bet_text, fill="black", font=font_no_bet)
+
+    margin_x, margin_y = 254, 996
+    max_text_width = 660 
+    lines, current_line = [], ""
+    for char in comment_text:
+        if font_main.getlength(current_line + char) > max_text_width:
+            if char in "，。、！？」》）\n":
+                current_line += char; lines.append(current_line); current_line = ""
+            else:
+                lines.append(current_line); current_line = char
+        else:
+            if char == "\n": lines.append(current_line); current_line = ""
+            else: current_line += char
+    if current_line: lines.append(current_line)
+    for line in lines:
+        draw.text((margin_x, margin_y), line, fill="black", font=font_main)
+        margin_y += 32 
+
+    header_height = 55 
+    row_height = 36
+    col_widths = [135, 55, 50, 50, 55, 65] 
+    headers = [race_title, "預計\n評分", "標準\n分", "優勢", "調整\n評分", "知舍\n優勢"]
+    
+    def draw_table(start_x, start_y, df_part):
+        header_width = sum(col_widths)
+        draw.rectangle([start_x, start_y, start_x + header_width, start_y + header_height], fill="#1E90FF")
+        curr_x = start_x
+        for i, header_text in enumerate(headers):
+            lines = header_text.split('\n')
+            offset_y = 17 if len(lines) == 1 else 7 
+            for j, line in enumerate(lines):
+                text_w = font_header.getlength(line)
+                offset_x = 8 if i == 0 else max(0, (col_widths[i] - text_w) / 2)
+                draw.text((curr_x + offset_x, start_y + offset_y + (j*20)), line, fill="white", font=font_header)
+            curr_x += col_widths[i]
+            
+        current_y = start_y + header_height
+        for idx, (orig_index, row) in enumerate(df_part.iterrows()):
+            bg_color = "white" if idx % 2 == 0 else "#F0F0F0"
+            draw.rectangle([start_x, current_y, start_x + header_width, current_y + row_height], fill=bg_color)
+            row_values = [str(row["馬名"])] + [str(int(row[col])) for col in ["預計評分", "標準分", "優勢", "調整評分", "知舍優勢"]]
+            curr_x = start_x
+            for i, val in enumerate(row_values):
+                text_w = font_main.getlength(val) 
+                offset_x = 6 if i == 0 else max(0, (col_widths[i] - text_w) / 2)
+                row_text_y_offset = 5  
+                draw.text((curr_x + offset_x, current_y + row_text_y_offset), val, fill="black", font=font_main)
+                curr_x += col_widths[i]
+            current_y += row_height
+
+    if total_horses <= 16:
+        draw_table(57, 212, sorted_df)
+    else:
+        half = (total_horses + 1) // 2
+        draw_table(57, 212, sorted_df.iloc[:half])
+        draw_table(485, 212, sorted_df.iloc[half:])
+    return image
+
+gs_client = get_gsheets_client()
+
+st.subheader("1. 同步馬會排位至 Google Sheets")
+st.caption("只限每日出排位時撳一次。")
+col1, col2 = st.columns([3, 1])
+with col1:
+    date_input = st.text_input("輸入賽事日期 (例如 20260819):", value="20260819")
+with col2:
+    st.write("")
+    st.write("")
+    if st.button("🔄 下載並寫入雲端", use_container_width=True) and gs_client:
+        with st.spinner("寫入中，請稍候..."):
+            msg = fetch_and_push_to_gsheets(date_input, gs_client)
+            if "成功" in msg: st.success(msg)
+            else: st.error(msg)
+
+st.divider()
+
+st.subheader("2. 雲端自動讀取並出圖")
+st.caption("系統會自動從 Google Sheets 讀取評分及評語，請確保雲端已填寫完畢。")
+
+race_to_fetch = st.selectbox("選擇要處理嘅場次:", ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11"])
+
+if st.button("📥 一鍵讀取 & 生成 PNG 圖片", type="primary", use_container_width=True) and gs_client:
+    with st.spinner("讀取雲端數據中..."):
+        df, fetched_no_bet, fetched_comment, msg = fetch_from_gsheets(gs_client, race_to_fetch)
+        
+        if df is not None:
+            template_file = "New_XX_2.jpg"
+            if not os.path.exists(template_file):
+                st.error("❌ 搵唔到底圖！")
+            else:
+                st.success(f"✅ 成功讀取 {race_to_fetch}！")
+                st.info(f"📍 系統讀取到嘅 No Bet 指數： {fetched_no_bet}")
+                
+                result_img = draw_image(template_file, df, race_to_fetch, fetched_no_bet, fetched_comment)
+                
+                buf = io.BytesIO()
+                result_img.save(buf, format="PNG")
+                byte_im = buf.getvalue()
+                
+                st.image(byte_im, caption=f"{race_to_fetch} 預覽", use_container_width=True)
+                st.download_button(
+                    label="💾 下載 PNG 圖片",
+                    data=byte_im,
+                    file_name=f"GoldRacing_{date_input}_{race_to_fetch}.png",
+                    mime="image/png"
+                )
+        else:
+            st.error(f"❌ 讀取失敗: {msg}。")
