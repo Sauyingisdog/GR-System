@@ -82,6 +82,26 @@ def fetch_and_push_to_gsheets(date_str, client):
             if not title_element: continue
             
             title_text = title_element.get_text(separator=' ')
+
+            # ==========================================
+            # 🛑 國家過濾器 (只允許英國賽事)
+            # ==========================================
+            full_race_desc = race.get_text(separator=' ').strip()
+            
+            is_target_country = False
+            # 只要包含以下任何一個字眼，就會當係英國馬放行
+            target_keywords = ["英國", "雅士谷", "約克", "新市場", "葉森", "古活", "沙丘園", "唐加士達", "紐百利"] 
+            
+            for keyword in target_keywords:
+                if keyword in full_race_desc:
+                    is_target_country = True
+                    break
+            
+            # 如果篇嘢入面完全無英國嘅字眼，直接 Skip 呢場馬
+            if not is_target_country:
+                continue 
+            # ==========================================
+
             race_num_match = re.search(r'第 (\d+) 場', title_text)
             if not race_num_match: continue
             race_num = f"R{race_num_match.group(1)}"
@@ -118,12 +138,11 @@ def fetch_and_push_to_gsheets(date_str, client):
             base_weight = top_rating_horses[0]['actual_weight'] if top_rating_horses else 0
             
             # 建立大表格：左邊係入分區 (A-F)，中間隔一條空欄 (G)，右邊係展示區 (H-M)
-            # 先準備好一個夠闊嘅 2D List
             sheet_data = [["" for _ in range(13)] for _ in range(len(horses) + 10)]
             
             # 第一行表頭
-            headers = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
-            for i, h in enumerate(headers):
+            headers_list = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
+            for i, h in enumerate(headers_list):
                 sheet_data[0][i] = h + " (入分區)"
                 sheet_data[0][i+7] = h + " (自動排序展示區)" # H到M欄
 
@@ -148,7 +167,6 @@ def fetch_and_push_to_gsheets(date_str, client):
 
             # 喺右邊 (H2) 放入 =SORT 公式
             last_horse_row = len(horses) + 1
-            # 公式意思：將 A2:F 範圍嘅資料，根據第 6 欄 (知舍優勢) 由大至小 (FALSE) 排列
             sheet_data[1][7] = f"=SORT(A2:F{last_horse_row}, 6, FALSE)"
 
             # 喺右邊最下方加入評語區
@@ -175,12 +193,10 @@ def fetch_from_gsheets(client, race_num):
     try:
         spreadsheet = client.open_by_key(SHEET_ID)
         worksheet = spreadsheet.worksheet(race_num)
-        # 讀取整個 Sheet 嘅數值
         data = worksheet.get_all_values(value_render_option='UNFORMATTED_VALUE')
         
         if not data: return None, None, None, "找不到數據"
             
-        # 尋找右邊 (H欄，index=7) 嘅 "--- 評語區 ---"
         split_idx = -1
         for i, row in enumerate(data):
             if len(row) > 7 and row[7] == "--- 評語區 ---":
@@ -190,21 +206,17 @@ def fetch_from_gsheets(client, race_num):
         if split_idx == -1:
             return None, None, None, "找不到評語區，請確保雲端表格格式正確。"
             
-        # 抽取右邊 (H到M欄，index 7-12) 嘅排序後馬匹數據
         horse_data = []
-        for i in range(1, split_idx): # 從第二行開始，到評語區之上
+        for i in range(1, split_idx): 
             if len(data[i]) > 7 and str(data[i][7]).strip() != "":
                  horse_data.append(data[i][7:13])
                  
-        # 手動定義表頭
-        headers = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
-        df = pd.DataFrame(horse_data, columns=headers)
+        headers_list = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
+        df = pd.DataFrame(horse_data, columns=headers_list)
         
-        # 轉換數字格式
         for col in ['預計評分', '標準分', '優勢', '調整評分', '知舍優勢']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
-        # 讀取評語 (I欄，index=8)
         no_bet_val = str(data[split_idx+1][8]) if len(data[split_idx+1]) > 8 else ""
         comment_val = str(data[split_idx+2][8]) if len(data[split_idx+2]) > 8 else ""
         
@@ -226,7 +238,6 @@ def draw_image(template_path, df_data, race_title, no_bet_text, comment_text):
         font_header = ImageFont.load_default()
         font_no_bet = ImageFont.load_default()
 
-    # 因為 Google Sheet 已經排好，所以唔使再 sort_values，確保原汁原味
     sorted_df = df_data.copy()
     total_horses = len(sorted_df)
 
@@ -252,13 +263,13 @@ def draw_image(template_path, df_data, race_title, no_bet_text, comment_text):
     header_height = 55 
     row_height = 36
     col_widths = [135, 55, 50, 50, 55, 65] 
-    headers = [race_title, "預計\n評分", "標準\n分", "優勢", "調整\n評分", "知舍\n優勢"]
+    headers_list = [race_title, "預計\n評分", "標準\n分", "優勢", "調整\n評分", "知舍\n優勢"]
     
     def draw_table(start_x, start_y, df_part):
         header_width = sum(col_widths)
         draw.rectangle([start_x, start_y, start_x + header_width, start_y + header_height], fill="#1E90FF")
         curr_x = start_x
-        for i, header_text in enumerate(headers):
+        for i, header_text in enumerate(headers_list):
             lines = header_text.split('\n')
             offset_y = 17 if len(lines) == 1 else 7 
             for j, line in enumerate(lines):
