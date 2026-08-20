@@ -314,21 +314,235 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
 # ==========================================
 # 📊 步速圖 核心函數
 # ==========================================
-def draw_pace_map(df, race_name, pace_desc, track_type,
-                   col_unit=155, row_unit=130, origin_x=90,
-                   baseline_y_curve=693, baseline_y_straight=55,
-                   horse_w=130, horse_h=88):
 
+def fetch_and_push_pace_raw(date_str, client):
+    url = f"https://racing.hkjc.com/Racing/Info/MCS/Chinese/racing/prerace/dstr/{date_str}_S20000_S_DSTR.xml.zip"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        response.encoding = 'utf-8'
+        html_content = response.text
+
+        if "<table" not in html_content:
+            return "❌ 伺服器回傳內容冇表格。"
+
+        soup = BeautifulSoup(html_content, 'html.parser')
+        all_section_divs = soup.find_all('div', class_='sectionBg')
+
+        spreadsheet = client.open_by_key(SHEET_ID)
+        processed_races = []
+
+        for div in all_section_divs:
+            div_id = div.get('id', '')
+            if not (div_id.startswith('ST') or div_id.startswith('HV')):
+                continue
+
+            num_match = re.search(r'\d+', div_id)
+            if not num_match:
+                continue
+            race_no = int(num_match.group())
+            race_name = f"R{race_no}"
+
+            table = div.find_next('table', class_='tbRace')
+            if not table:
+                continue
+
+            rows = table.find_all('tr')[1:]
+            horses = []
+            for row in rows:
+                if "退出" in row.get_text():
+                    continue
+                if "後備馬匹" in row.get_text():
+                    break
+                cols = row.find_all('td')
+                if len(cols) >= 4:
+                    match = re.search(r'\d+', cols[0].text.strip())
+                    if match:
+                        horse_no = match.group()
+                        horse_name = cols[1].text.strip()
+                        draw_pos_match = re.search(r'\d+', cols[3].text.strip())
+                        draw_pos = int(draw_pos_match.group()) if draw_pos_match else 0
+                        horses.append({'no': horse_no, 'name': horse_name, 'draw': draw_pos})
+
+            if not horses:
+                continue
+
+            horses.sort(key=lambda h: h['draw'])
+
+            sheet_name = f"PaceRaw_{race_name}"
+            try:
+                worksheet = spreadsheet.worksheet(sheet_name)
+                worksheet.clear()
+            except gspread.exceptions.WorksheetNotFound:
+                worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="30", cols="5")
+
+            header_row = ["馬號", "馬名", "檔位"]
+            data_rows = [[h['no'], h['name'], h['draw']] for h in horses]
+            full_data = [header_row] + data_rows
+            worksheet.update('A1', full_data, value_input_option='USER_ENTERED')
+
+            processed_races.append(race_name)
+
+        if not processed_races:
+            return "❌ 搵唔到本地(沙田/跑馬地)賽事資料。"
+
+        processed_races.sort(key=lambda x: int(x[1:]))
+        return f"✅ 成功同步 {len(processed_races)} 場本地賽事嘅馬號/檔位資料！({', '.join(processed_races)})"
+
+    except Exception as e:
+        return f"❌ 發生錯誤: {e}"
+
+
+def fetch_pace_raw_from_gsheet(client, race_name):
+    try:
+        spreadsheet = client.open_by_key(SHEET_ID)
+        sheet_name = f"PaceRaw_{race_name}"
+        worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_values()
+
+        if len(data) < 2:
+            return None, "數據不足"
+
+        headers = data[0]
+        rows = data[1:]
+        df = pd.DataFrame(rows, columns=headers)
+        df["馬號"] = pd.to_numeric(df["馬號"], errors='coerce').fillna(0).astype(int)
+        df["檔位"] = pd.to_numeric(df["檔位"], errors='coerce').fillna(0).astype(int)
+
+        return df, "成功"
+    except Exception as e:
+        return None, str(e)
+
+
+def parse_grid_cell(cell_text):
+    cell_text = str(cell_text).strip()
+    if not cell_text:
+        return None, 0, 0
+
+    num_match = re.search(r'\d+', cell_text)
+    if not num_match:
+        return None, 0, 0
+
+    horse_no = int(num_match.group())
+
+    has_up = '^' in cell_text
+    has_right = '>' in cell_text
+
+    if has_up and has_right:
+        row_offset, col_offset = 0, 0
+    elif has_up:
+        row_offset, col_offset = -0.5, 0
+    elif has_right:
+        row_offset, col_offset = 0, 0.5
+    else:
+        row_offset, col_offset = 0, 0
+
+    return horse_no, row_offset, col_offset
+
+
+def grid_to_horse_list(grid_df, num_rows, track_type):
+    horse_list = []
+    n_display_rows = len(grid_df)
+    total_cols = len(grid_df.columns)
+
+    for display_row_idx in range(n_display_rows):
+        row_cells = grid_df.iloc[display_row_idx]
+
+        if track_type == "直路":
+            actual_row_base = display_row_idx + 1
+        else:
+            actual_row_base = n_display_rows - display_row_idx
+
+        filled = []
+        for col_idx, col_name in enumerate(grid_df.columns):
+            horse_no, row_offset, col_offset = parse_grid_cell(row_cells[col_name])
+            if horse_no is not None:
+                filled.append((col_idx, horse_no, row_offset, col_offset))
+
+        if not filled:
+            continue
+
+        min_col_idx = min(f[0] for f in filled)
+        max_col_idx = max(f[0] for f in filled)
+        span = max_col_idx - min_col_idx + 1
+
+        center_shift = (total_cols - span) / 2.0
+
+        for orig_col_idx, horse_no, row_offset, col_offset in filled:
+            relative_pos = orig_col_idx - min_col_idx
+            actual_col = relative_pos + 1 + center_shift + col_offset
+            actual_row = actual_row_base + row_offset
+
+            horse_list.append({
+                '馬號': horse_no,
+                'Row': actual_row,
+                'Col': actual_col
+            })
+
+    return pd.DataFrame(horse_list)
+
+
+def init_grid_by_draw(horses_df, num_cols=8, num_rows=4):
+    horses_sorted = horses_df.sort_values('檔位').reset_index(drop=True)
+    grid_data = [["" for _ in range(num_cols)] for _ in range(num_rows)]
+
+    for idx, horse in horses_sorted.iterrows():
+        col_position = idx // num_rows
+        row_position_from_bottom = idx % num_rows
+
+        display_row = num_rows - 1 - row_position_from_bottom
+        display_col = col_position
+
+        if display_col < num_cols:
+            grid_data[display_row][display_col] = str(int(horse['馬號']))
+
+    col_names = [f"Col{i+1}" for i in range(num_cols)]
+    grid_df = pd.DataFrame(grid_data, columns=col_names)
+    return grid_df
+
+
+def build_horse_name_map(horses_df):
+    return dict(zip(horses_df['馬號'].astype(int), horses_df['馬名']))
+
+
+def attach_horse_names(horse_list_df, name_map):
+    horse_list_df = horse_list_df.copy()
+    horse_list_df['馬名'] = horse_list_df['馬號'].map(name_map).fillna("未知")
+    return horse_list_df
+
+
+def detect_position_conflicts(horse_list_df):
+    conflicts = []
+    seen_positions = {}
+
+    for _, horse in horse_list_df.iterrows():
+        pos_key = (round(horse['Row'], 2), round(horse['Col'], 2))
+        horse_no = int(horse['馬號'])
+
+        if pos_key in seen_positions:
+            other_horse_no = seen_positions[pos_key]
+            conflicts.append(f"⚠️ 馬號 {other_horse_no} 同 馬號 {horse_no} 位置重疊 (Row={pos_key[0]}, Col={pos_key[1]})")
+        else:
+            seen_positions[pos_key] = horse_no
+
+    return conflicts
+
+
+def draw_pace_map(df, race_name, pace_desc, track_type,
+                   col_unit=150, row_unit=145, origin_x=60,
+                   baseline_y_curve=665, baseline_y_straight=75,
+                   horse_w=158, horse_h=105, row_gap=5):
     template_file = "backgroundstraight.jpg" if track_type == "直路" else "background.jpg"
     image = Image.open(template_file).convert("RGB")
     draw = ImageDraw.Draw(image)
 
     font_filename = "LXGWWenKaiTC-Bold.ttf"
     try:
-        font_number = ImageFont.truetype(font_filename, 26)
-        font_name = ImageFont.truetype(font_filename, 17)
-        font_title = ImageFont.truetype(font_filename, 34)
-        font_subtitle = ImageFont.truetype(font_filename, 22)
+        font_number = ImageFont.truetype(font_filename, 28)
+        font_name = ImageFont.truetype(font_filename, 24)
+        font_title = ImageFont.truetype(font_filename, 40)
+        font_subtitle = ImageFont.truetype(font_filename, 26)
     except:
         font_number = ImageFont.load_default()
         font_name = ImageFont.load_default()
@@ -339,32 +553,33 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
     horse_earn = Image.open("earn.png").convert("RGBA").resize((horse_w, horse_h))
     horse_lost = Image.open("lost.png").convert("RGBA").resize((horse_w, horse_h))
 
-    # ---- 橙色 Info Box 文字 ----
     box_center_x = 635
     title_w = font_title.getlength(race_name)
-    draw.text((box_center_x - title_w/2, 30), race_name, fill="black", font=font_title)
+    draw.text((box_center_x - title_w/2, 35), race_name, fill="black", font=font_title)
     subtitle_text = f"預計步速: {pace_desc}"
     subtitle_w = font_subtitle.getlength(subtitle_text)
-    draw.text((box_center_x - subtitle_w/2, 85), subtitle_text, fill="black", font=font_subtitle)
+    draw.text((box_center_x - subtitle_w/2, 90), subtitle_text, fill="black", font=font_subtitle)
 
     baseline_y = baseline_y_straight if track_type == "直路" else baseline_y_curve
 
-    # ---- 先計算所有馬嘅實際座標，方便後面做重疊避讓 ----
-    placed_boxes = []  # 記錄已經放咗嘅 name tag 範圍，用嚟避免重疊
+    scale_x = horse_w / 158.0
+    scale_y = horse_h / 105.0
+    num_box = (65 * scale_x, 29.4 * scale_y, 145.15 * scale_x, 27.63 * scale_y)
+    name_box = (5.92 * scale_x, 75.89 * scale_y, 145.15 * scale_x, 27.63 * scale_y)
 
     for _, horse in df.iterrows():
         row = float(horse["Row"])
         col = float(horse["Col"])
         no = str(int(horse["馬號"]))
-        name = str(horse["馬名"])
-        mark = str(horse["步速標記"])
+        name = str(horse["馬名"]) if "馬名" in horse else ""
+        mark = str(horse["步速標記"]) if "步速標記" in horse else "正常"
 
         px = int(origin_x + (col - 1) * col_unit)
 
         if track_type == "直路":
-            py = int(baseline_y + (row - 1) * row_unit)
+            py = int(baseline_y + row_gap + (row - 1) * (row_unit + row_gap))
         else:
-            py = int(baseline_y - horse_h - (row - 1) * row_unit)
+            py = int(baseline_y - horse_h - row_gap - (row - 1) * (row_unit + row_gap))
 
         if mark == "賺步速":
             horse_img = horse_earn
@@ -375,59 +590,42 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
 
         image.paste(horse_img, (px, py), horse_img)
 
-        # 馬號 (印喺馬背中間)
-        num_w = font_number.getlength(no)
-        draw.text((px + horse_w/2 - num_w/2, py + 12), no, fill="white", font=font_number)
+        nb_x, nb_y, nb_w, nb_h = num_box
+        num_text_w = font_number.getlength(no)
+        num_x = px + nb_x + (nb_w - num_text_w) / 2
+        num_y = py + nb_y + (nb_h - 28) / 2
+        draw.text((num_x, num_y), no, fill="white", font=font_number)
 
-        # ---- 馬名牌，加自動避讓邏輯 ----
-        name_w = font_name.getlength(name)
-        tag_w = name_w + 18
-        tag_h = 24
-        tag_x = px + horse_w/2 - tag_w/2
-        tag_y = py + horse_h + 3
-
-        # 檢查同已放置嘅 name tag 有冇重疊，如果有就向下微調
-        max_attempts = 10
-        attempt = 0
-        while attempt < max_attempts:
-            overlap = False
-            for (bx1, by1, bx2, by2) in placed_boxes:
-                if not (tag_x + tag_w < bx1 or tag_x > bx2 or tag_y + tag_h < by1 or tag_y > by2):
-                    overlap = True
-                    break
-            if not overlap:
-                break
-            tag_y += tag_h + 2
-            attempt += 1
-
-        placed_boxes.append((tag_x, tag_y, tag_x + tag_w, tag_y + tag_h))
-
-        draw.rectangle([tag_x, tag_y, tag_x + tag_w, tag_y + tag_h], fill="white", outline="black")
-        draw.text((tag_x + 9, tag_y + 3), name, fill="black", font=font_name)
+        nm_x, nm_y, nm_w, nm_h = name_box
+        name_text_w = font_name.getlength(name)
+        name_x = px + nm_x + (nm_w - name_text_w) / 2
+        name_y = py + nm_y + (nm_h - 24) / 2
+        draw.text((name_x, name_y), name, fill="black", font=font_name)
 
     return image
 
 
-def push_pace_to_gsheet(client, race_name, pace_desc, track_type, df):
+def push_pace_grid_to_gsheet(client, race_name, pace_desc, track_type, grid_df):
     spreadsheet = client.open_by_key(SHEET_ID)
-    sheet_name = f"Pace_{race_name}"
+    sheet_name = f"PaceGrid_{race_name}"
     try:
         worksheet = spreadsheet.worksheet(sheet_name)
         worksheet.clear()
     except gspread.exceptions.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="30", cols="10")
+        worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="20", cols="10")
 
-    meta_row = [race_name, pace_desc, track_type, "", "", ""]
-    header_row = ["馬號", "馬名", "Row", "Col", "步速標記"]
-    data_rows = df.values.tolist()
-    full_data = [meta_row, header_row] + data_rows
+    meta_row = [race_name, pace_desc, track_type]
+    grid_rows = grid_df.values.tolist()
+    header_row = list(grid_df.columns)
+
+    full_data = [meta_row, header_row] + grid_rows
     worksheet.update('A1', full_data, value_input_option='USER_ENTERED')
 
 
-def fetch_pace_from_gsheet(client, race_name):
+def fetch_pace_grid_from_gsheet(client, race_name):
     try:
         spreadsheet = client.open_by_key(SHEET_ID)
-        sheet_name = f"Pace_{race_name}"
+        sheet_name = f"PaceGrid_{race_name}"
         worksheet = spreadsheet.worksheet(sheet_name)
         data = worksheet.get_all_values()
 
@@ -439,15 +637,11 @@ def fetch_pace_from_gsheet(client, race_name):
         pace_desc_out = meta[1]
         track_type_out = meta[2]
 
-        headers = data[1]
-        rows = data[2:]
-        df = pd.DataFrame(rows, columns=headers)
+        header_row = data[1]
+        grid_rows = data[2:]
+        grid_df = pd.DataFrame(grid_rows, columns=header_row)
 
-        df["馬號"] = pd.to_numeric(df["馬號"], errors='coerce').fillna(0).astype(int)
-        df["Row"] = pd.to_numeric(df["Row"], errors='coerce').fillna(1.0)
-        df["Col"] = pd.to_numeric(df["Col"], errors='coerce').fillna(1.0)
-
-        return race_name_out, pace_desc_out, track_type_out, df, "成功"
+        return race_name_out, pace_desc_out, track_type_out, grid_df, "成功"
     except Exception as e:
         return None, None, None, None, str(e)
 
@@ -770,71 +964,96 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
             except Exception as e:
                 st.error(f"讀取或生成圖片時發生錯誤: {e}")
 
-elif system_mode == "📊 步速圖":
+def pace_map_ui(gs_client):
     st.subheader("📊 步速圖系統")
 
     tab1, tab2 = st.tabs(["✏️ 排位輸入（分析師）", "🎨 出圖（出圖負責人）"])
 
     with tab1:
+        date_input_pace = st.text_input("賽事日期 (例如 20260701):", value="20260701", key="pace_fetch_date")
+        if st.button("🔄 下載本地賽事馬號/檔位資料", use_container_width=True) and gs_client:
+            with st.spinner("抓取資料中..."):
+                msg = fetch_and_push_pace_raw(date_input_pace, gs_client)
+                if "成功" in msg:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
+        st.divider()
+
         race_name = st.text_input("場次", value="R6", key="pace_race_name")
         pace_desc = st.text_input("預計步速", value="中等偏快", key="pace_desc")
         track_type = st.radio("賽道類型", ["彎道", "直路"], horizontal=True, key="pace_track_type")
-        num_horses = st.number_input("馬匹數量", min_value=1, max_value=20, value=12, key="pace_num_horses")
 
-        if "pace_df" not in st.session_state or len(st.session_state.pace_df) != num_horses:
-            st.session_state.pace_df = pd.DataFrame({
-                "馬號": list(range(1, num_horses + 1)),
-                "馬名": [""] * num_horses,
-                "Row": [2.0] * num_horses,
-                "Col": [float(i+1) for i in range(num_horses)],
-                "步速標記": ["正常"] * num_horses,
-            })
+        if st.button("📥 讀取呢場嘅馬號/檔位並初始化排位", use_container_width=True) and gs_client:
+            horses_df, msg = fetch_pace_raw_from_gsheet(gs_client, race_name)
+            if horses_df is not None:
+                st.session_state.pace_horses_df = horses_df
+                st.session_state.pace_grid_df = init_grid_by_draw(horses_df, num_cols=8, num_rows=4)
+                st.success(f"已讀取 {race_name} 嘅 {len(horses_df)} 匹馬，並按檔位初始排位。")
+            else:
+                st.error(f"❌ 讀取失敗：{msg}")
 
-        edited = st.data_editor(
-            st.session_state.pace_df,
-            column_config={
-                "Row": st.column_config.NumberColumn(step=0.5, min_value=1.0, max_value=6.0),
-                "Col": st.column_config.NumberColumn(step=0.5, min_value=1.0, max_value=15.0),
-                "步速標記": st.column_config.SelectboxColumn(options=["正常", "蝕步速", "賺步速"]),
-            },
-            num_rows="fixed",
-            key="pace_data_editor",
-            use_container_width=True
-        )
-        st.session_state.pace_df = edited
+        if "pace_grid_df" in st.session_state:
+            st.write("**排位 Grid**（輸入馬號，可加 `^`=向上半格 或 `>`=向右半格，例如 `11^`）")
 
-        with st.expander("⚙️ 進階座標微調（如有偏差先開）"):
-            col_unit = st.slider("Col 單位寬度 (px)", 80, 250, 155, key="s_col_unit")
-            row_unit = st.slider("Row 單位高度 (px)", 80, 200, 130, key="s_row_unit")
-            origin_x = st.slider("起始 X 座標", 0, 300, 90, key="s_origin_x")
-            baseline_curve = st.slider("彎道 baseline Y", 500, 720, 693, key="s_base_curve")
-            baseline_straight = st.slider("直路 baseline Y", 0, 200, 55, key="s_base_straight")
-            horse_w = st.slider("馬公仔闊度", 60, 200, 130, key="s_horse_w")
-            horse_h = st.slider("馬公仔高度", 40, 150, 88, key="s_horse_h")
+            n_rows = len(st.session_state.pace_grid_df)
+            if track_type == "彎道":
+                row_labels = [f"Row {n_rows - i}" for i in range(n_rows)]
+            else:
+                row_labels = [f"Row {i + 1}" for i in range(n_rows)]
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("👀 即時預覽", use_container_width=True):
-                preview_img = draw_pace_map(
-                    edited, race_name, pace_desc, track_type,
-                    col_unit=col_unit, row_unit=row_unit, origin_x=origin_x,
-                    baseline_y_curve=baseline_curve, baseline_y_straight=baseline_straight,
-                    horse_w=horse_w, horse_h=horse_h
-                )
-                st.image(preview_img, use_container_width=True)
+            display_df = st.session_state.pace_grid_df.copy()
+            display_df.insert(0, "位置", row_labels)
+            display_df = display_df.set_index("位置")
 
-        with col_b:
-            if st.button("💾 儲存去雲端（俾出圖用）", use_container_width=True) and gs_client:
-                push_pace_to_gsheet(gs_client, race_name, pace_desc, track_type, edited)
-                st.success(f"已儲存 {race_name} 嘅排位資料！")
+            edited_grid = st.data_editor(
+                display_df,
+                use_container_width=True,
+                key="pace_grid_editor"
+            )
+            st.session_state.pace_grid_df = edited_grid.reset_index(drop=True)
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("👀 即時預覽", use_container_width=True):
+                    horse_list = grid_to_horse_list(st.session_state.pace_grid_df, n_rows, track_type)
+                    if "pace_horses_df" in st.session_state:
+                        name_map = build_horse_name_map(st.session_state.pace_horses_df)
+                        horse_list = attach_horse_names(horse_list, name_map)
+                    else:
+                        horse_list["馬名"] = ""
+
+                    conflicts = detect_position_conflicts(horse_list)
+                    if conflicts:
+                        for c in conflicts:
+                            st.warning(c)
+
+                    preview_img = draw_pace_map(horse_list, race_name, pace_desc, track_type)
+                    st.image(preview_img, use_container_width=True)
+
+            with col_b:
+                if st.button("💾 儲存去雲端（俾出圖用）", use_container_width=True) and gs_client:
+                    push_pace_grid_to_gsheet(gs_client, race_name, pace_desc, track_type, st.session_state.pace_grid_df)
+                    st.success(f"已儲存 {race_name} 嘅排位資料！")
 
     with tab2:
         race_to_load = st.text_input("輸入場次", value="R6", key="pace_load_race")
-        if st.button("📥 讀取排位資料並出圖", type="primary") and gs_client:
+        if st.button("📥 讀取排位資料並出圖", type="primary", use_container_width=True) and gs_client:
             with st.spinner("讀取中..."):
-                race_name2, pace_desc2, track_type2, df2, msg = fetch_pace_from_gsheet(gs_client, race_to_load)
-            if df2 is not None:
-                result_img = draw_pace_map(df2, race_name2, pace_desc2, track_type2)
+                race_name2, pace_desc2, track_type2, grid_df2, msg = fetch_pace_grid_from_gsheet(gs_client, race_to_load)
+
+            if grid_df2 is not None:
+                horses_df2, name_msg = fetch_pace_raw_from_gsheet(gs_client, race_to_load)
+                horse_list2 = grid_to_horse_list(grid_df2, len(grid_df2), track_type2)
+
+                if horses_df2 is not None:
+                    name_map2 = build_horse_name_map(horses_df2)
+                    horse_list2 = attach_horse_names(horse_list2, name_map2)
+                else:
+                    horse_list2["馬名"] = ""
+
+                result_img = draw_pace_map(horse_list2, race_name2, pace_desc2, track_type2)
                 buf = io.BytesIO()
                 result_img.save(buf, format="PNG")
                 byte_im = buf.getvalue()
@@ -842,3 +1061,6 @@ elif system_mode == "📊 步速圖":
                 st.download_button("💾 下載圖片", data=byte_im, file_name=f"PaceMap_{race_to_load}.png", mime="image/png")
             else:
                 st.error(f"❌ 讀取失敗：{msg}")
+
+elif system_mode == "📊 步速圖":
+    pace_map_ui(gs_client)
