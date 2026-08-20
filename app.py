@@ -87,7 +87,7 @@ def extract_race_name_and_info(table):
     return race_name, info_text
 
 # ==========================================
-# 🇬🇧 英國/本地系統核心函數 (已升級 S1-1 邏輯)
+# 🇬🇧 英國/本地系統核心函數
 # ==========================================
 def fetch_and_push_uk(date_str, client):
     url = f"https://racing.hkjc.com/Racing/Info/MCS/Chinese/racing/prerace/dstr/{date_str}_S20000_S_DSTR.xml.zip"
@@ -220,7 +220,8 @@ def fetch_from_gsheets_uk(client, race_num):
     except Exception as e:
         return None, None, None, str(e)
 
-def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text):
+# 🌟 新增 tier 參數，控制出圖邏輯 (platinum / gold)
+def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text, tier="platinum"):
     image = Image.open(template_path).convert("RGB")
     draw = ImageDraw.Draw(image)
     
@@ -228,33 +229,47 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text)
     try:
         font_main = ImageFont.truetype(font_filename, 20)      
         font_header = ImageFont.truetype(font_filename, 18)    
-        font_no_bet = ImageFont.truetype(font_filename, 42)    
+        font_no_bet = ImageFont.truetype(font_filename, 42)
+        font_gold = ImageFont.truetype(font_filename, 60) # 白金專享專用特大字體    
     except:
         font_main = ImageFont.load_default()
         font_header = ImageFont.load_default()
         font_no_bet = ImageFont.load_default()
+        font_gold = ImageFont.load_default()
 
     sorted_df = df_data.copy()
     total_horses = len(sorted_df)
 
-    draw.text((55, 1010), no_bet_text, fill="black", font=font_no_bet)
+    # 🌟 邏輯分流：白金舍出 No Bet 指數，金舍留白
+    if tier == "platinum":
+        draw.text((55, 1010), no_bet_text, fill="black", font=font_no_bet)
 
+    # 🌟 邏輯分流：畫評語區
     margin_x, margin_y = 254, 996
-    max_text_width = 660 
-    lines, current_line = [], ""
-    for char in comment_text:
-        if font_main.getlength(current_line + char) > max_text_width:
-            if char in "，。、！？」》）\n":
-                current_line += char; lines.append(current_line); current_line = ""
+    box_width = 660 
+    
+    if tier == "platinum":
+        lines, current_line = [], ""
+        for char in comment_text:
+            if font_main.getlength(current_line + char) > box_width:
+                if char in "，。、！？」》）\n":
+                    current_line += char; lines.append(current_line); current_line = ""
+                else:
+                    lines.append(current_line); current_line = char
             else:
-                lines.append(current_line); current_line = char
-        else:
-            if char == "\n": lines.append(current_line); current_line = ""
-            else: current_line += char
-    if current_line: lines.append(current_line)
-    for line in lines:
-        draw.text((margin_x, margin_y), line, fill="black", font=font_main)
-        margin_y += 32 
+                if char == "\n": lines.append(current_line); current_line = ""
+                else: current_line += char
+        if current_line: lines.append(current_line)
+        for line in lines:
+            draw.text((margin_x, margin_y), line, fill="black", font=font_main)
+            margin_y += 32 
+    else:
+        # 金舍閹割版：中間置中印「白金專享」
+        gold_text = "白金專享"
+        text_w = font_gold.getlength(gold_text)
+        center_x = margin_x + (box_width - text_w) / 2
+        center_y = margin_y + 15 # 垂直微設置中
+        draw.text((center_x, center_y), gold_text, fill="black", font=font_gold)
 
     header_height = 55 
     row_height = 36
@@ -547,10 +562,17 @@ if system_mode == "🇬🇧 英國/本地 XX創馬法":
                 else: st.error(msg)
 
     st.write("2. 雲端讀取並出圖")
-    # 🌟 已經將舊嘅 Selectbox 改為 Text Input，支援 S1-1 同 R1 輸入
     race_to_fetch = st.text_input("輸入要處理嘅場次 (海外請打 S1-1，本地請打 R1):", value="S1-1")
 
-    if st.button("📥 一鍵讀取 & 生成 PNG 圖片", type="primary", use_container_width=True) and gs_client:
+    # 🌟 雙按鈕設計：一鍵分離白金舍與金舍
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        plat_btn = st.button("👑 生成白金舍圖片 (完整版)", type="primary", use_container_width=True)
+    with col_btn2:
+        gold_btn = st.button("⭐ 生成金舍圖片 (閹割版)", use_container_width=True)
+
+    if plat_btn or gold_btn:
+        tier_mode = "platinum" if plat_btn else "gold"
         with st.spinner("讀取雲端數據中..."):
             df, fetched_no_bet, fetched_comment, msg = fetch_from_gsheets_uk(gs_client, race_to_fetch)
             if df is not None:
@@ -559,12 +581,14 @@ if system_mode == "🇬🇧 英國/本地 XX創馬法":
                     st.error("❌ 搵唔到底圖！")
                 else:
                     st.success(f"✅ 成功讀取 {race_to_fetch}！")
-                    result_img = draw_uk_image(template_file, df, race_to_fetch, fetched_no_bet, fetched_comment)
+                    result_img = draw_uk_image(template_file, df, race_to_fetch, fetched_no_bet, fetched_comment, tier=tier_mode)
                     buf = io.BytesIO()
                     result_img.save(buf, format="PNG")
                     byte_im = buf.getvalue()
-                    st.image(byte_im, caption=f"{race_to_fetch} 預覽", use_container_width=True)
-                    st.download_button(label="💾 下載 PNG 圖片", data=byte_im, file_name=f"GoldRacing_UK_{date_input}_{race_to_fetch}.png", mime="image/png")
+                    
+                    file_suffix = "Platinum" if tier_mode == "platinum" else "Gold"
+                    st.image(byte_im, caption=f"{race_to_fetch} 預覽 ({file_suffix})", use_container_width=True)
+                    st.download_button(label=f"💾 下載 PNG 圖片 ({file_suffix})", data=byte_im, file_name=f"GoldRacing_UK_{date_input}_{race_to_fetch}_{file_suffix}.png", mime="image/png")
             else:
                 st.error(f"❌ 讀取失敗: {msg}。")
 
