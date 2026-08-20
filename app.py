@@ -870,100 +870,6 @@ def draw_aus_image(template_path, df_data):
         
     return image.convert("RGB")
 
-# ==========================================
-# 🎨 介面佈局
-# ==========================================
-st.title("🏇 Gold Racing 雲端自動化系統")
-system_mode = st.radio(
-    "請選擇你要使用嘅系統：",
-    ("🇬🇧 英國/本地 XX創馬法", "🇦🇺 澳洲 Form Guide", "📊 步速圖"),
-    horizontal=True
-)
-st.divider()
-
-if system_mode == "🇬🇧 英國/本地 XX創馬法":
-    st.subheader("🇬🇧 英國/本地系統")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        date_input = st.text_input("1. 輸入賽事日期 (例如 20260819):", value="20260819")
-    with col2:
-        st.write("")
-        st.write("")
-        if st.button("🔄 下載並寫入雲端", use_container_width=True) and gs_client:
-            with st.spinner("寫入中，請稍候..."):
-                msg = fetch_and_push_uk(date_input, gs_client)
-                if "成功" in msg: st.success(msg)
-                else: st.error(msg)
-
-    st.write("2. 雲端讀取並出圖")
-    race_to_fetch = st.text_input("輸入要處理嘅場次 (海外請打 S1-1，本地請打 R1):", value="S1-1")
-
-    # 🌟 雙按鈕設計：一鍵分離白金舍與金舍
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        plat_btn = st.button("👑 生成白金舍圖片 (完整版)", type="primary", use_container_width=True)
-    with col_btn2:
-        gold_btn = st.button("⭐ 生成金舍圖片 (閹割版)", use_container_width=True)
-
-    if plat_btn or gold_btn:
-        tier_mode = "platinum" if plat_btn else "gold"
-        with st.spinner("讀取雲端數據中..."):
-            df, fetched_no_bet, fetched_comment, msg = fetch_from_gsheets_uk(gs_client, race_to_fetch)
-            if df is not None:
-                template_file = "New_XX_2.jpg"
-                if not os.path.exists(template_file):
-                    st.error("❌ 搵唔到底圖！")
-                else:
-                    st.success(f"✅ 成功讀取 {race_to_fetch}！")
-                    result_img = draw_uk_image(template_file, df, race_to_fetch, fetched_no_bet, fetched_comment, tier=tier_mode)
-                    buf = io.BytesIO()
-                    result_img.save(buf, format="PNG")
-                    byte_im = buf.getvalue()
-                    
-                    file_suffix = "Platinum" if tier_mode == "platinum" else "Gold"
-                    st.image(byte_im, caption=f"{race_to_fetch} 預覽 ({file_suffix})", use_container_width=True)
-                    st.download_button(label=f"💾 下載 PNG 圖片 ({file_suffix})", data=byte_im, file_name=f"GoldRacing_UK_{date_input}_{race_to_fetch}_{file_suffix}.png", mime="image/png")
-            else:
-                st.error(f"❌ 讀取失敗: {msg}。")
-
-elif system_mode == "🇦🇺 澳洲 Form Guide":
-    st.subheader("🇦🇺 澳洲系統")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        date_input_aus = st.text_input("1. 輸入海外賽事日期:", value="20260820", key="aus_date")
-    with col2:
-        st.write("")
-        st.write("")
-        if st.button("🔄 下載澳洲排位", use_container_width=True) and gs_client:
-            with st.spinner("抓取海外資料中..."):
-                msg = fetch_and_push_aus(date_input_aus, gs_client)
-                if "成功" in msg: st.success(msg)
-                else: st.error(msg)
-    
-    st.write("2. 雲端讀取並出圖")
-    race_to_fetch_aus = st.text_input("輸入要處理嘅場次 (例如 S1-2):", value="S1-2")
-    if st.button("📥 生成澳洲 Form Guide 圖片", type="primary") and gs_client:
-        with st.spinner("出圖中..."):
-            try:
-                worksheet = gs_client.open_by_key(SHEET_ID).worksheet(race_to_fetch_aus)
-                data = worksheet.get_all_values()
-                if len(data) > 1:
-                    df = pd.DataFrame(data[1:], columns=data[0]).fillna("")
-                    template_file = "Aus_Template.jpg"
-                    if not os.path.exists(template_file):
-                        st.error("❌ 搵唔到底圖 `Aus_Template.jpg`，請確保已經上傳到 GitHub！")
-                    else:
-                        result_img = draw_aus_image(template_file, df)
-                        buf = io.BytesIO()
-                        result_img.save(buf, format="PNG")
-                        byte_im = buf.getvalue()
-                        st.image(byte_im, caption=f"{race_to_fetch_aus} 澳洲 Form Guide", use_container_width=True)
-                        st.download_button("💾 下載圖片", data=byte_im, file_name=f"Aus_Form_{race_to_fetch_aus}.png", mime="image/png")
-                else:
-                    st.error("Google Sheet 入面無資料！")
-            except Exception as e:
-                st.error(f"讀取或生成圖片時發生錯誤: {e}")
-
 def pace_map_ui(gs_client):
     st.subheader("📊 步速圖系統")
 
@@ -1061,6 +967,100 @@ def pace_map_ui(gs_client):
                 st.download_button("💾 下載圖片", data=byte_im, file_name=f"PaceMap_{race_to_load}.png", mime="image/png")
             else:
                 st.error(f"❌ 讀取失敗：{msg}")
+
+# ==========================================
+# 🎨 介面佈局
+# ==========================================
+st.title("🏇 Gold Racing 雲端自動化系統")
+system_mode = st.radio(
+    "請選擇你要使用嘅系統：",
+    ("🇬🇧 英國/本地 XX創馬法", "🇦🇺 澳洲 Form Guide", "📊 步速圖"),
+    horizontal=True
+)
+st.divider()
+
+if system_mode == "🇬🇧 英國/本地 XX創馬法":
+    st.subheader("🇬🇧 英國/本地系統")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        date_input = st.text_input("1. 輸入賽事日期 (例如 20260819):", value="20260819")
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("🔄 下載並寫入雲端", use_container_width=True) and gs_client:
+            with st.spinner("寫入中，請稍候..."):
+                msg = fetch_and_push_uk(date_input, gs_client)
+                if "成功" in msg: st.success(msg)
+                else: st.error(msg)
+
+    st.write("2. 雲端讀取並出圖")
+    race_to_fetch = st.text_input("輸入要處理嘅場次 (海外請打 S1-1，本地請打 R1):", value="S1-1")
+
+    # 🌟 雙按鈕設計：一鍵分離白金舍與金舍
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        plat_btn = st.button("👑 生成白金舍圖片 (完整版)", type="primary", use_container_width=True)
+    with col_btn2:
+        gold_btn = st.button("⭐ 生成金舍圖片 (閹割版)", use_container_width=True)
+
+    if plat_btn or gold_btn:
+        tier_mode = "platinum" if plat_btn else "gold"
+        with st.spinner("讀取雲端數據中..."):
+            df, fetched_no_bet, fetched_comment, msg = fetch_from_gsheets_uk(gs_client, race_to_fetch)
+            if df is not None:
+                template_file = "New_XX_2.jpg"
+                if not os.path.exists(template_file):
+                    st.error("❌ 搵唔到底圖！")
+                else:
+                    st.success(f"✅ 成功讀取 {race_to_fetch}！")
+                    result_img = draw_uk_image(template_file, df, race_to_fetch, fetched_no_bet, fetched_comment, tier=tier_mode)
+                    buf = io.BytesIO()
+                    result_img.save(buf, format="PNG")
+                    byte_im = buf.getvalue()
+                    
+                    file_suffix = "Platinum" if tier_mode == "platinum" else "Gold"
+                    st.image(byte_im, caption=f"{race_to_fetch} 預覽 ({file_suffix})", use_container_width=True)
+                    st.download_button(label=f"💾 下載 PNG 圖片 ({file_suffix})", data=byte_im, file_name=f"GoldRacing_UK_{date_input}_{race_to_fetch}_{file_suffix}.png", mime="image/png")
+            else:
+                st.error(f"❌ 讀取失敗: {msg}。")
+
+elif system_mode == "🇦🇺 澳洲 Form Guide":
+    st.subheader("🇦🇺 澳洲系統")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        date_input_aus = st.text_input("1. 輸入海外賽事日期:", value="20260820", key="aus_date")
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("🔄 下載澳洲排位", use_container_width=True) and gs_client:
+            with st.spinner("抓取海外資料中..."):
+                msg = fetch_and_push_aus(date_input_aus, gs_client)
+                if "成功" in msg: st.success(msg)
+                else: st.error(msg)
+    
+    st.write("2. 雲端讀取並出圖")
+    race_to_fetch_aus = st.text_input("輸入要處理嘅場次 (例如 S1-2):", value="S1-2")
+    if st.button("📥 生成澳洲 Form Guide 圖片", type="primary") and gs_client:
+        with st.spinner("出圖中..."):
+            try:
+                worksheet = gs_client.open_by_key(SHEET_ID).worksheet(race_to_fetch_aus)
+                data = worksheet.get_all_values()
+                if len(data) > 1:
+                    df = pd.DataFrame(data[1:], columns=data[0]).fillna("")
+                    template_file = "Aus_Template.jpg"
+                    if not os.path.exists(template_file):
+                        st.error("❌ 搵唔到底圖 `Aus_Template.jpg`，請確保已經上傳到 GitHub！")
+                    else:
+                        result_img = draw_aus_image(template_file, df)
+                        buf = io.BytesIO()
+                        result_img.save(buf, format="PNG")
+                        byte_im = buf.getvalue()
+                        st.image(byte_im, caption=f"{race_to_fetch_aus} 澳洲 Form Guide", use_container_width=True)
+                        st.download_button("💾 下載圖片", data=byte_im, file_name=f"Aus_Form_{race_to_fetch_aus}.png", mime="image/png")
+                else:
+                    st.error("Google Sheet 入面無資料！")
+            except Exception as e:
+                st.error(f"讀取或生成圖片時發生錯誤: {e}")
 
 elif system_mode == "📊 步速圖":
     pace_map_ui(gs_client)
