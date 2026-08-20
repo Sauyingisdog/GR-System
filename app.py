@@ -202,38 +202,10 @@ if system_mode == "🇬🇧 英國/本地 XX創馬法":
                 if "成功" in msg: st.success(msg)
                 else: st.error(msg)
     
-st.subheader("2. 雲端自動讀取並出圖")
-st.caption("系統會自動從 Google Sheets 讀取評分及評語，請確保雲端已填寫完畢。")
-
-race_to_fetch = st.selectbox("選擇要處理嘅場次:", ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11"])
-
-if st.button("📥 一鍵讀取 & 生成 PNG 圖片", type="primary", use_container_width=True) and gs_client:
-    with st.spinner("讀取雲端數據中..."):
-        df, fetched_no_bet, fetched_comment, msg = fetch_from_gsheets(gs_client, race_to_fetch)
-        
-        if df is not None:
-            template_file = "New_XX_2.jpg"
-            if not os.path.exists(template_file):
-                st.error("❌ 搵唔到底圖！")
-            else:
-                st.success(f"✅ 成功讀取 {race_to_fetch}！")
-                st.info(f"📍 系統讀取到嘅 No Bet 指數： {fetched_no_bet}")
-                
-                result_img = draw_image(template_file, df, race_to_fetch, fetched_no_bet, fetched_comment)
-                
-                buf = io.BytesIO()
-                result_img.save(buf, format="PNG")
-                byte_im = buf.getvalue()
-                
-                st.image(byte_im, caption=f"{race_to_fetch} 預覽", use_container_width=True)
-                st.download_button(
-                    label="💾 下載 PNG 圖片",
-                    data=byte_im,
-                    file_name=f"GoldRacing_{date_input}_{race_to_fetch}.png",
-                    mime="image/png"
-                )
-        else:
-            st.error(f"❌ 讀取失敗: {msg}。")
+    st.write("2. 雲端讀取並出圖")
+    race_to_fetch_uk = st.text_input("輸入要處理嘅場次 (例如 S1-1 或 R1):", value="S1-1")
+    if st.button("📥 生成英國圖片", type="primary") and gs_client:
+        st.info("英國出圖功能暫時共用舊版邏輯。")
 
 # ==============================================================================
 # 模組 B：澳洲 Form Guide (欄寬極致優化版)
