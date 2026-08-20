@@ -238,8 +238,8 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
         
         # 🌟 核心升級：根據馬匹數量決定表格專用字體大細
         if total_horses <= 16:
-            font_table_main = ImageFont.truetype(font_filename, 26) # 單行：字體微微放大
-            font_table_header = ImageFont.truetype(font_filename, 22)
+            font_table_main = ImageFont.truetype(font_filename, 24) # 配合新行高，字體微微調校
+            font_table_header = ImageFont.truetype(font_filename, 20)
         else:
             font_table_main = ImageFont.truetype(font_filename, 20) # 雙行：維持原判
             font_table_header = ImageFont.truetype(font_filename, 18)
@@ -279,14 +279,13 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
 
     # 🌟 核心升級：根據馬匹數量決定表格尺寸比例
     if total_horses <= 16:
-        header_height = 65 
-        row_height = 42 # 行高微調企理，唔會過份拉長
-        # 欄位大幅加闊 (闊度 1.9 倍)，總闊度由 410px 變 780px
+        header_height = 55 # 縮矮表頭，慳返啲位
+        row_height = 38    # 行高收緊，避免16隻馬踩界
         col_widths = [260, 105, 95, 95, 105, 120] 
     else:
         header_height = 55 
         row_height = 36
-        col_widths = [135, 55, 50, 50, 55, 65] # 雙行原本 Size，總闊度 410px
+        col_widths = [135, 55, 50, 50, 55, 65] 
 
     headers_list = [race_title, "預計\n評分", "標準\n分", "優勢", "調整\n評分", "知舍\n優勢"]
     
@@ -299,8 +298,8 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
             
             # 判斷 Y 軸 Offset 同行距 (對應單雙行設定)
             if total_horses <= 16:
-                offset_y = 20 if len(lines) == 1 else 10
-                line_spacing = 24
+                offset_y = 16 if len(lines) == 1 else 6
+                line_spacing = 22
             else:
                 offset_y = 17 if len(lines) == 1 else 7
                 line_spacing = 20
@@ -321,14 +320,14 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
             for i, val in enumerate(row_values):
                 text_w = font_table_main.getlength(val) 
                 offset_x = 12 if (i == 0 and total_horses <= 16) else 6 if i == 0 else max(0, (col_widths[i] - text_w) / 2)
-                row_text_y_offset = 6 if total_horses <= 16 else 5  
+                row_text_y_offset = 5  
                 draw.text((curr_x + offset_x, current_y + row_text_y_offset), val, fill="black", font=font_table_main)
                 curr_x += col_widths[i]
             current_y += row_height
 
     if total_horses <= 16:
-        # 單行模式：推去 X = 194 (完美對齊下方「徒弟的話」評語區置中)
-        draw_table(194, 212, sorted_df)
+        # 單行模式：X推左至 150 (視覺置中)，Y移上至 195 (避開下方評語區)
+        draw_table(150, 195, sorted_df)
     else:
         # 雙行模式：維持左右並排
         half = (total_horses + 1) // 2
