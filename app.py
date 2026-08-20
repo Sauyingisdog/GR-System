@@ -225,20 +225,26 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
     image = Image.open(template_path).convert("RGB")
     draw = ImageDraw.Draw(image)
     
+    sorted_df = df_data.copy()
+    total_horses = len(sorted_df)
+
     font_filename = "LXGWWenKaiTC-Bold.ttf" 
     try:
+        # 保留畀下方「徒弟的話」使用嘅原本字體
         font_main = ImageFont.truetype(font_filename, 20)      
         font_header = ImageFont.truetype(font_filename, 18)    
         font_no_bet = ImageFont.truetype(font_filename, 42)
         font_gold = ImageFont.truetype(font_filename, 60) # 白金專享專用特大字體    
+        
+        # 🌟 核心升級：根據馬匹數量決定表格專用字體大細
+        if total_horses <= 16:
+            font_table_main = ImageFont.truetype(font_filename, 26) # 單行：字體微微放大
+            font_table_header = ImageFont.truetype(font_filename, 22)
+        else:
+            font_table_main = ImageFont.truetype(font_filename, 20) # 雙行：維持原判
+            font_table_header = ImageFont.truetype(font_filename, 18)
     except:
-        font_main = ImageFont.load_default()
-        font_header = ImageFont.load_default()
-        font_no_bet = ImageFont.load_default()
-        font_gold = ImageFont.load_default()
-
-    sorted_df = df_data.copy()
-    total_horses = len(sorted_df)
+        font_main = font_header = font_no_bet = font_gold = font_table_main = font_table_header = ImageFont.load_default()
 
     # 🌟 邏輯分流：白金舍出 No Bet 指數，金舍留白
     if tier == "platinum":
@@ -268,12 +274,20 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
         gold_text = "白金專享"
         text_w = font_gold.getlength(gold_text)
         center_x = margin_x + (box_width - text_w) / 2
-        center_y = margin_y + 15 # 垂直微設置中
+        center_y = margin_y + 15 
         draw.text((center_x, center_y), gold_text, fill="black", font=font_gold)
 
-    header_height = 55 
-    row_height = 36
-    col_widths = [135, 55, 50, 50, 55, 65] 
+    # 🌟 核心升級：根據馬匹數量決定表格尺寸比例
+    if total_horses <= 16:
+        header_height = 65 
+        row_height = 42 # 行高微調企理，唔會過份拉長
+        # 欄位大幅加闊 (闊度 1.9 倍)，總闊度由 410px 變 780px
+        col_widths = [260, 105, 95, 95, 105, 120] 
+    else:
+        header_height = 55 
+        row_height = 36
+        col_widths = [135, 55, 50, 50, 55, 65] # 雙行原本 Size，總闊度 410px
+
     headers_list = [race_title, "預計\n評分", "標準\n分", "優勢", "調整\n評分", "知舍\n優勢"]
     
     def draw_table(start_x, start_y, df_part):
@@ -282,11 +296,20 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
         curr_x = start_x
         for i, header_text in enumerate(headers_list):
             lines = header_text.split('\n')
-            offset_y = 17 if len(lines) == 1 else 7 
+            
+            # 判斷 Y 軸 Offset 同行距 (對應單雙行設定)
+            if total_horses <= 16:
+                offset_y = 20 if len(lines) == 1 else 10
+                line_spacing = 24
+            else:
+                offset_y = 17 if len(lines) == 1 else 7
+                line_spacing = 20
+
             for j, line in enumerate(lines):
-                text_w = font_header.getlength(line)
-                offset_x = 8 if i == 0 else max(0, (col_widths[i] - text_w) / 2)
-                draw.text((curr_x + offset_x, start_y + offset_y + (j*20)), line, fill="white", font=font_header)
+                text_w = font_table_header.getlength(line)
+                # 單行模式下，馬名 (i=0) 個左邊距稍為加大
+                offset_x = 15 if (i == 0 and total_horses <= 16) else 8 if i == 0 else max(0, (col_widths[i] - text_w) / 2)
+                draw.text((curr_x + offset_x, start_y + offset_y + (j*line_spacing)), line, fill="white", font=font_table_header)
             curr_x += col_widths[i]
             
         current_y = start_y + header_height
@@ -296,19 +319,22 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
             row_values = [str(row["馬名"])] + [str(int(row[col])) for col in ["預計評分", "標準分", "優勢", "調整評分", "知舍優勢"]]
             curr_x = start_x
             for i, val in enumerate(row_values):
-                text_w = font_main.getlength(val) 
-                offset_x = 6 if i == 0 else max(0, (col_widths[i] - text_w) / 2)
-                row_text_y_offset = 5  
-                draw.text((curr_x + offset_x, current_y + row_text_y_offset), val, fill="black", font=font_main)
+                text_w = font_table_main.getlength(val) 
+                offset_x = 12 if (i == 0 and total_horses <= 16) else 6 if i == 0 else max(0, (col_widths[i] - text_w) / 2)
+                row_text_y_offset = 6 if total_horses <= 16 else 5  
+                draw.text((curr_x + offset_x, current_y + row_text_y_offset), val, fill="black", font=font_table_main)
                 curr_x += col_widths[i]
             current_y += row_height
 
     if total_horses <= 16:
-        draw_table(57, 212, sorted_df)
+        # 單行模式：推去 X = 194 (完美對齊下方「徒弟的話」評語區置中)
+        draw_table(194, 212, sorted_df)
     else:
+        # 雙行模式：維持左右並排
         half = (total_horses + 1) // 2
         draw_table(57, 212, sorted_df.iloc[:half])
         draw_table(485, 212, sorted_df.iloc[half:])
+        
     return image
 
 # ==========================================
