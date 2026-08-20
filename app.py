@@ -52,7 +52,7 @@ def get_gsheets_client():
 gs_client = get_gsheets_client()
 
 # ==========================================
-# 🛠️ 共用工具函數
+# 🛠️ 共用工具函數 (全球統一 S 識別)
 # ==========================================
 def clean_weight(weight_str):
     num = re.sub(r'\D', '', str(weight_str))
@@ -87,7 +87,7 @@ def extract_race_name_and_info(table):
     return race_name, info_text
 
 # ==========================================
-# 🇬🇧 英國/本地系統核心函數 (完美還原舊版)
+# 🇬🇧 英國/本地系統核心函數 (已升級 S1-1 邏輯)
 # ==========================================
 def fetch_and_push_uk(date_str, client):
     url = f"https://racing.hkjc.com/Racing/Info/MCS/Chinese/racing/prerace/dstr/{date_str}_S20000_S_DSTR.xml.zip"
@@ -100,35 +100,23 @@ def fetch_and_push_uk(date_str, client):
         
         if "<table" not in html_content: return "伺服器回傳內容冇表格。"
         soup = BeautifulSoup(html_content, 'html.parser')
-        races = soup.find_all('div', class_='sectionBg')
-        if not races: return "搵唔到賽事資料。"
+        tables = soup.find_all('table', class_='tbRace')
+        if not tables: return "搵唔到賽事資料。"
 
         spreadsheet = client.open_by_key(SHEET_ID)
         processed_races = []
 
-        for race in races:
-            title_element = race.find('h3', class_='raceInfo')
-            if not title_element: continue
-            
-            title_text = title_element.get_text(separator=' ')
-            full_race_desc = race.get_text(separator=' ').strip()
+        for table in tables:
+            race_num, info_text = extract_race_name_and_info(table)
             
             is_target_country = False
             target_keywords = ["英國", "雅士谷", "約克", "新市場", "葉森", "古活", "沙丘園", "唐加士達", "紐百利"] 
             for keyword in target_keywords:
-                if keyword in full_race_desc:
+                if keyword in info_text:
                     is_target_country = True
                     break
-            if not is_target_country:
-                continue 
+            if not is_target_country: continue 
 
-            race_num_match = re.search(r'第 (\d+) 場', title_text)
-            if not race_num_match: continue
-            race_num = f"R{race_num_match.group(1)}"
-            
-            table = race.find('table', class_='tbRace')
-            if not table: continue
-            
             rows = table.find_all('tr')[1:] 
             horses = []
             for row in rows:
@@ -151,7 +139,7 @@ def fetch_and_push_uk(date_str, client):
             except gspread.exceptions.WorksheetNotFound:
                 worksheet = spreadsheet.add_worksheet(title=race_num, rows="40", cols="15")
 
-            is_handicap = "讓賽" in title_text
+            is_handicap = "讓賽" in info_text
             max_rating = max([h['rating'] for h in horses]) if horses else 0
             min_weight = min([h['actual_weight'] for h in horses]) if horses else 0
             top_rating_horses = [h for h in horses if h['rating'] == max_rating]
@@ -473,17 +461,15 @@ def draw_aus_image(template_path, df_data):
             return mapping.get(val, ("", None))
         return val, None
 
-    # 🚀 終極精準欄寬設定 (總闊度控制在 1180px 內，完美適應 1280 畫布)
     start_x = 45 
     col_widths = [
-        35, 25, 80, 75, # 場, 號, 馬匹, 騎師 (馬匹同騎師進一步瘦身)
-        80, 50, 50,      # 形勢, 熱身, 已博
-        75, 75, 75, 75, 75, 65, 70, 65, # 特殊備忘區 (全部充足位單行顯示)
-        70, 70, 70       # 變數區 (最右邊不再出界)
+        35, 25, 80, 75, 
+        80, 50, 50,      
+        75, 75, 75, 75, 75, 65, 70, 65, 
+        70, 70, 70       
     ]
     headers_list = df_data.columns[:18]
 
-    # 第一層表頭 (大類)
     categories = [
         ("今仗資料", 4, "black", "white"),
         ("上仗備忘", 3, "#bf9000", "white"),
@@ -500,7 +486,6 @@ def draw_aus_image(template_path, df_data):
         curr_x += w
         col_idx += span
         
-    # 第二層表頭 (細項)
     curr_x = start_x
     for i, header_text in enumerate(headers_list):
         draw.rectangle([curr_x, start_y + cat_height, curr_x + col_widths[i], data_start_y], fill="#f0f0f0")
@@ -509,7 +494,6 @@ def draw_aus_image(template_path, df_data):
         draw.text((curr_x + offset_x, start_y + cat_height + 10), header_text, fill="black", font=font_header_sub)
         curr_x += col_widths[i]
 
-    # 數據區
     current_y = data_start_y
     for idx, row in df_data.iterrows():
         bg_color = "white" if idx % 2 == 0 else "#F8F8F8"
@@ -563,7 +547,8 @@ if system_mode == "🇬🇧 英國/本地 XX創馬法":
                 else: st.error(msg)
 
     st.write("2. 雲端讀取並出圖")
-    race_to_fetch = st.selectbox("選擇要處理嘅場次:", ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11"])
+    # 🌟 已經將舊嘅 Selectbox 改為 Text Input，支援 S1-1 同 R1 輸入
+    race_to_fetch = st.text_input("輸入要處理嘅場次 (海外請打 S1-1，本地請打 R1):", value="S1-1")
 
     if st.button("📥 一鍵讀取 & 生成 PNG 圖片", type="primary", use_container_width=True) and gs_client:
         with st.spinner("讀取雲端數據中..."):
