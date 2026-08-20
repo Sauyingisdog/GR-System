@@ -327,7 +327,7 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
 
     if total_horses <= 16:
         # 單行模式：X推左至 150 (視覺置中)，Y移上至 195 (避開下方評語區)
-        draw_table(150, 195, sorted_df)
+        draw_table(130, 195, sorted_df)
     else:
         # 雙行模式：維持左右並排
         half = (total_horses + 1) // 2
