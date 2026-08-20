@@ -203,13 +203,12 @@ if system_mode == "🇬🇧 英國/本地 XX創馬法":
                 else: st.error(msg)
     
     st.write("2. 雲端讀取並出圖")
-    race_to_fetch_uk = st.text_input("輸入要處理嘅場次 (例如 S1-2 或 R1):", value="S1-1")
+    race_to_fetch_uk = st.text_input("輸入要處理嘅場次 (例如 S1-1 或 R1):", value="S1-1")
     if st.button("📥 生成英國圖片", type="primary") and gs_client:
         st.info("英國出圖功能暫時共用舊版邏輯。")
 
-
 # ==============================================================================
-# 模組 B：澳洲 Form Guide (極速數字輸入版)
+# 模組 B：澳洲 Form Guide (欄寬極致優化版)
 # ==============================================================================
 elif system_mode == "🇦🇺 澳洲 Form Guide":
     st.subheader("🇦🇺 澳洲系統")
@@ -256,17 +255,15 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
                     worksheet = spreadsheet.worksheet(race_num)
                     worksheet.clear()
                 except gspread.exceptions.WorksheetNotFound:
-                    worksheet = spreadsheet.add_worksheet(title=race_num, rows="40", cols="25") # 加闊容納 Legend
+                    worksheet = spreadsheet.add_worksheet(title=race_num, rows="40", cols="22") 
 
                 # 準備 Sheet 內容
                 headers_list = ['場', '號', '馬匹', '騎師', '場地/形勢', '純熱身', '已博', '1st/2nd up', '箭頭今場', '目標下場', '未博伏兵', '騎師轉變', '場地', '隔夜過冷', '變化地', '正面配變', '閹後初出', '移民初出']
-                sheet_data = [["" for _ in range(25)] for _ in range(max(30, len(horses) + 5))]
+                sheet_data = [["" for _ in range(22)] for _ in range(max(30, len(horses) + 5))]
                 
-                # 填入表頭
                 for i, h in enumerate(headers_list): sheet_data[0][i] = h
                 
-                # 填入馬匹基本資料
-                short_race_name = race_num.replace("S1-", "R") # 將 S1-2 顯示為 R2
+                short_race_name = race_num.replace("S1-", "R")
                 if "-" in race_num: short_race_name = f"R{race_num.split('-')[1]}"
                 for idx, h in enumerate(horses):
                     sheet_data[idx+1][0] = short_race_name
@@ -278,7 +275,7 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
                 legend = [
                     ["【極速入分密碼表】", ""],
                     ["★ 所有項目:", "留空 = 無"],
-                    ["★ 有/冇 Emoji項目:", "打 1 = 顯示"],
+                    ["★ Emoji項目:", "打 1 = 顯示"],
                     ["---", "---"],
                     ["★ 場地/形勢 (E):", ""],
                     ["1 = 賺場 (綠)", "4 = 外疊 (紅)"],
@@ -293,12 +290,26 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
                     ["2 = 轉弱 (紅)", "4 = 焗換 (黃)"]
                 ]
                 for i, r_data in enumerate(legend):
-                    sheet_data[i+1][19] = r_data[0] # T欄
-                    sheet_data[i+1][20] = r_data[1] # U欄
+                    sheet_data[i+1][19] = r_data[0] # T欄 (Index 19)
+                    sheet_data[i+1][20] = r_data[1] # U欄 (Index 20)
 
                 worksheet.update('A1', sheet_data, value_input_option='USER_ENTERED')
                 worksheet.freeze(rows=1)
-                worksheet.columns_auto_resize(20, 21) # 調闊 Legend 區
+                
+                # 🚀 強制設定 Google Sheet 欄闊 (瘦身大行動)
+                try:
+                    body = {
+                        "requests": [
+                            {"updateDimensionProperties": {"range": {"sheetId": worksheet.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 2}, "properties": {"pixelSize": 35}, "fields": "pixelSize"}}, # 場, 號
+                            {"updateDimensionProperties": {"range": {"sheetId": worksheet.id, "dimension": "COLUMNS", "startIndex": 2, "endIndex": 4}, "properties": {"pixelSize": 90}, "fields": "pixelSize"}}, # 馬, 騎
+                            {"updateDimensionProperties": {"range": {"sheetId": worksheet.id, "dimension": "COLUMNS", "startIndex": 4, "endIndex": 18}, "properties": {"pixelSize": 60}, "fields": "pixelSize"}}, # 入分區 E-R
+                            {"updateDimensionProperties": {"range": {"sheetId": worksheet.id, "dimension": "COLUMNS", "startIndex": 19, "endIndex": 21}, "properties": {"pixelSize": 150}, "fields": "pixelSize"}} # Legend區 T-U
+                        ]
+                    }
+                    spreadsheet.batch_update(body)
+                except:
+                    pass # 如果 Batch update 失敗就略過，唔影響主程式
+
                 processed_races.append(race_num)
                 
             return f"成功同步 {len(processed_races)} 場澳洲賽事至 Google Sheets！"
@@ -306,36 +317,36 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
             return f"發生錯誤: {e}"
 
     # ---------------------------------------------
-    # 畫澳洲 Form 圖形 (動態縮放 + 數字翻譯機)
+    # 畫澳洲 Form 圖形 (完美欄寬比例版)
     # ---------------------------------------------
     def draw_aus_image(template_path, df_data):
         image = Image.open(template_path).convert("RGBA")
         draw = ImageDraw.Draw(image)
         
-        # 動態計算行高
         total_horses = len(df_data)
-        start_y = 110 # 整個表嘅起始 Y
-        cat_height = 36 # 第一層大類高度
-        sub_height = 36 # 第二層細項高度
+        start_y = 110
+        cat_height = 36 
+        sub_height = 36 
         data_start_y = start_y + cat_height + sub_height
-        available_h = 720 - data_start_y - 20 # 預留 20px 底部空間
+        available_h = 720 - data_start_y - 20 
         
-        row_height = 36 # 預設
+        row_height = 36 
         if total_horses > 0:
             row_height = int(min(45, max(22, available_h / total_horses)))
             
-        # 根據行高微調字體大細
         main_font_size = 18 if row_height > 28 else 15
         
         font_filename = "LXGWWenKaiTC-Bold.ttf" 
         try:
             font_main = ImageFont.truetype(font_filename, main_font_size)
-            font_header = ImageFont.truetype(font_filename, 18)
+            font_header_main = ImageFont.truetype(font_filename, 18)
+            font_header_sub = ImageFont.truetype(font_filename, 15) # 用稍細字體畫第二層表頭
         except:
             font_main = ImageFont.load_default()
-            font_header = ImageFont.load_default()
+            font_header_main = ImageFont.load_default()
+            font_header_sub = ImageFont.load_default()
 
-        # 預先加載 Emoji PNG (並根據行高 Resize)
+        # 預先加載 Emoji PNG
         emojis = {}
         emoji_size = min(24, row_height - 6)
         emoji_map = {
@@ -348,7 +359,6 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
             if os.path.exists(filename):
                 emojis[key] = Image.open(filename).convert("RGBA").resize((emoji_size, emoji_size))
 
-        # 定義畫「藥丸」標籤
         def draw_pill(draw_obj, text, x, y, width, height, bg_color):
             draw_obj.rounded_rectangle([x, y, x + width, y + height], radius=6, fill=bg_color)
             text_color = "black" if bg_color == "#ffe5a0" else "white"
@@ -357,11 +367,9 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
             text_y = y + (height - main_font_size) / 2 - 2
             draw_obj.text((text_x, text_y), text, fill=text_color, font=font_main)
 
-        # 💡 數字代碼翻譯機
         def translate_value(col_name, val):
-            if val == "": return "", None # 留空 = 無嘢
+            if val == "": return "", None 
             if col_name in emoji_map.keys() and val == '1': return 'EMOJI', None
-            
             if col_name == '場地/形勢':
                 mapping = {'1': ('賺場', '#2E8B57'), '2': ('賺欄', '#2E8B57'), '3': ('蝕場', '#DC143C'), 
                            '4': ('外疊', '#DC143C'), '5': ('塞車', '#DC143C'), '6': ('慢閘', '#DC143C')}
@@ -375,12 +383,17 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
                 return mapping.get(val, ("", None))
             return val, None
 
-        # 表格坐標設定 (總闊 1190，完美置中)
-        start_x = 45 
-        col_widths = [50, 40, 130, 100, 80, 50, 50, 80, 50, 60, 60, 80, 60, 60, 60, 60, 60, 60] 
+        # 🚀 重新編排欄寬，減磅擴建 (總闊 1195px)
+        start_x = 42 
+        col_widths = [
+            40, 30, 100, 90, # 場, 號, 馬匹, 騎師 (瘦身)
+            85, 55, 50,      # 形勢, 熱身, 已博
+            95, 75, 75, 75, 75, 75, 75, 75, # 特殊備忘區全體加闊
+            75, 75, 75       # 變數區加闊
+        ]
         headers_list = df_data.columns[:18]
 
-        # 畫第一層表頭 (大類 + 指定顏色)
+        # 畫第一層表頭 (大類)
         categories = [
             ("今仗資料", 4, "black", "white"),
             ("上仗備忘", 3, "#bf9000", "white"),
@@ -392,8 +405,8 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
         for text, span, bg, fg in categories:
             w = sum(col_widths[i] for i in range(col_idx, col_idx + span))
             draw.rectangle([curr_x, start_y, curr_x + w, start_y + cat_height], fill=bg)
-            text_w = font_header.getlength(text)
-            draw.text((curr_x + (w - text_w)/2, start_y + 8), text, fill=fg, font=font_header)
+            text_w = font_header_main.getlength(text)
+            draw.text((curr_x + (w - text_w)/2, start_y + 8), text, fill=fg, font=font_header_main)
             curr_x += w
             col_idx += span
             
@@ -401,9 +414,9 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
         curr_x = start_x
         for i, header_text in enumerate(headers_list):
             draw.rectangle([curr_x, start_y + cat_height, curr_x + col_widths[i], data_start_y], fill="#f0f0f0")
-            text_w = font_main.getlength(header_text)
+            text_w = font_header_sub.getlength(header_text)
             offset_x = (col_widths[i] - text_w) / 2
-            draw.text((curr_x + offset_x, start_y + cat_height + 8), header_text, fill="black", font=font_main)
+            draw.text((curr_x + offset_x, start_y + cat_height + 10), header_text, fill="black", font=font_header_sub)
             curr_x += col_widths[i]
 
         # 畫數據區
