@@ -312,6 +312,146 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
     return image
 
 # ==========================================
+# 📊 步速圖 核心函數
+# ==========================================
+def draw_pace_map(df, race_name, pace_desc, track_type,
+                   col_unit=155, row_unit=130, origin_x=90,
+                   baseline_y_curve=693, baseline_y_straight=55,
+                   horse_w=130, horse_h=88):
+
+    template_file = "backgroundstraight.jpg" if track_type == "直路" else "background.jpg"
+    image = Image.open(template_file).convert("RGB")
+    draw = ImageDraw.Draw(image)
+
+    font_filename = "LXGWWenKaiTC-Bold.ttf"
+    try:
+        font_number = ImageFont.truetype(font_filename, 26)
+        font_name = ImageFont.truetype(font_filename, 17)
+        font_title = ImageFont.truetype(font_filename, 34)
+        font_subtitle = ImageFont.truetype(font_filename, 22)
+    except:
+        font_number = ImageFont.load_default()
+        font_name = ImageFont.load_default()
+        font_title = ImageFont.load_default()
+        font_subtitle = ImageFont.load_default()
+
+    horse_normal = Image.open("normal.png").convert("RGBA").resize((horse_w, horse_h))
+    horse_earn = Image.open("earn.png").convert("RGBA").resize((horse_w, horse_h))
+    horse_lost = Image.open("lost.png").convert("RGBA").resize((horse_w, horse_h))
+
+    # ---- 橙色 Info Box 文字 ----
+    box_center_x = 635
+    title_w = font_title.getlength(race_name)
+    draw.text((box_center_x - title_w/2, 30), race_name, fill="black", font=font_title)
+    subtitle_text = f"預計步速: {pace_desc}"
+    subtitle_w = font_subtitle.getlength(subtitle_text)
+    draw.text((box_center_x - subtitle_w/2, 85), subtitle_text, fill="black", font=font_subtitle)
+
+    baseline_y = baseline_y_straight if track_type == "直路" else baseline_y_curve
+
+    # ---- 先計算所有馬嘅實際座標，方便後面做重疊避讓 ----
+    placed_boxes = []  # 記錄已經放咗嘅 name tag 範圍，用嚟避免重疊
+
+    for _, horse in df.iterrows():
+        row = float(horse["Row"])
+        col = float(horse["Col"])
+        no = str(int(horse["馬號"]))
+        name = str(horse["馬名"])
+        mark = str(horse["步速標記"])
+
+        px = int(origin_x + (col - 1) * col_unit)
+
+        if track_type == "直路":
+            py = int(baseline_y + (row - 1) * row_unit)
+        else:
+            py = int(baseline_y - horse_h - (row - 1) * row_unit)
+
+        if mark == "賺步速":
+            horse_img = horse_earn
+        elif mark == "蝕步速":
+            horse_img = horse_lost
+        else:
+            horse_img = horse_normal
+
+        image.paste(horse_img, (px, py), horse_img)
+
+        # 馬號 (印喺馬背中間)
+        num_w = font_number.getlength(no)
+        draw.text((px + horse_w/2 - num_w/2, py + 12), no, fill="white", font=font_number)
+
+        # ---- 馬名牌，加自動避讓邏輯 ----
+        name_w = font_name.getlength(name)
+        tag_w = name_w + 18
+        tag_h = 24
+        tag_x = px + horse_w/2 - tag_w/2
+        tag_y = py + horse_h + 3
+
+        # 檢查同已放置嘅 name tag 有冇重疊，如果有就向下微調
+        max_attempts = 10
+        attempt = 0
+        while attempt < max_attempts:
+            overlap = False
+            for (bx1, by1, bx2, by2) in placed_boxes:
+                if not (tag_x + tag_w < bx1 or tag_x > bx2 or tag_y + tag_h < by1 or tag_y > by2):
+                    overlap = True
+                    break
+            if not overlap:
+                break
+            tag_y += tag_h + 2
+            attempt += 1
+
+        placed_boxes.append((tag_x, tag_y, tag_x + tag_w, tag_y + tag_h))
+
+        draw.rectangle([tag_x, tag_y, tag_x + tag_w, tag_y + tag_h], fill="white", outline="black")
+        draw.text((tag_x + 9, tag_y + 3), name, fill="black", font=font_name)
+
+    return image
+
+
+def push_pace_to_gsheet(client, race_name, pace_desc, track_type, df):
+    spreadsheet = client.open_by_key(SHEET_ID)
+    sheet_name = f"Pace_{race_name}"
+    try:
+        worksheet = spreadsheet.worksheet(sheet_name)
+        worksheet.clear()
+    except gspread.exceptions.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="30", cols="10")
+
+    meta_row = [race_name, pace_desc, track_type, "", "", ""]
+    header_row = ["馬號", "馬名", "Row", "Col", "步速標記"]
+    data_rows = df.values.tolist()
+    full_data = [meta_row, header_row] + data_rows
+    worksheet.update('A1', full_data, value_input_option='USER_ENTERED')
+
+
+def fetch_pace_from_gsheet(client, race_name):
+    try:
+        spreadsheet = client.open_by_key(SHEET_ID)
+        sheet_name = f"Pace_{race_name}"
+        worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_values()
+
+        if len(data) < 3:
+            return None, None, None, None, "數據不足"
+
+        meta = data[0]
+        race_name_out = meta[0]
+        pace_desc_out = meta[1]
+        track_type_out = meta[2]
+
+        headers = data[1]
+        rows = data[2:]
+        df = pd.DataFrame(rows, columns=headers)
+
+        df["馬號"] = pd.to_numeric(df["馬號"], errors='coerce').fillna(0).astype(int)
+        df["Row"] = pd.to_numeric(df["Row"], errors='coerce').fillna(1.0)
+        df["Col"] = pd.to_numeric(df["Col"], errors='coerce').fillna(1.0)
+
+        return race_name_out, pace_desc_out, track_type_out, df, "成功"
+    except Exception as e:
+        return None, None, None, None, str(e)
+
+# ==========================================
 # 🇦🇺 澳洲 Form Guide 核心函數
 # ==========================================
 def fetch_and_push_aus(date_str, client):
@@ -542,7 +682,7 @@ def draw_aus_image(template_path, df_data):
 st.title("🏇 Gold Racing 雲端自動化系統")
 system_mode = st.radio(
     "請選擇你要使用嘅系統：",
-    ("🇬🇧 英國/本地 XX創馬法", "🇦🇺 澳洲 Form Guide"),
+    ("🇬🇧 英國/本地 XX創馬法", "🇦🇺 澳洲 Form Guide", "📊 步速圖"),
     horizontal=True
 )
 st.divider()
@@ -629,3 +769,76 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
                     st.error("Google Sheet 入面無資料！")
             except Exception as e:
                 st.error(f"讀取或生成圖片時發生錯誤: {e}")
+
+elif system_mode == "📊 步速圖":
+    st.subheader("📊 步速圖系統")
+
+    tab1, tab2 = st.tabs(["✏️ 排位輸入（分析師）", "🎨 出圖（出圖負責人）"])
+
+    with tab1:
+        race_name = st.text_input("場次", value="R6", key="pace_race_name")
+        pace_desc = st.text_input("預計步速", value="中等偏快", key="pace_desc")
+        track_type = st.radio("賽道類型", ["彎道", "直路"], horizontal=True, key="pace_track_type")
+        num_horses = st.number_input("馬匹數量", min_value=1, max_value=20, value=12, key="pace_num_horses")
+
+        if "pace_df" not in st.session_state or len(st.session_state.pace_df) != num_horses:
+            st.session_state.pace_df = pd.DataFrame({
+                "馬號": list(range(1, num_horses + 1)),
+                "馬名": [""] * num_horses,
+                "Row": [2.0] * num_horses,
+                "Col": [float(i+1) for i in range(num_horses)],
+                "步速標記": ["正常"] * num_horses,
+            })
+
+        edited = st.data_editor(
+            st.session_state.pace_df,
+            column_config={
+                "Row": st.column_config.NumberColumn(step=0.5, min_value=1.0, max_value=6.0),
+                "Col": st.column_config.NumberColumn(step=0.5, min_value=1.0, max_value=15.0),
+                "步速標記": st.column_config.SelectboxColumn(options=["正常", "蝕步速", "賺步速"]),
+            },
+            num_rows="fixed",
+            key="pace_data_editor",
+            use_container_width=True
+        )
+        st.session_state.pace_df = edited
+
+        with st.expander("⚙️ 進階座標微調（如有偏差先開）"):
+            col_unit = st.slider("Col 單位寬度 (px)", 80, 250, 155, key="s_col_unit")
+            row_unit = st.slider("Row 單位高度 (px)", 80, 200, 130, key="s_row_unit")
+            origin_x = st.slider("起始 X 座標", 0, 300, 90, key="s_origin_x")
+            baseline_curve = st.slider("彎道 baseline Y", 500, 720, 693, key="s_base_curve")
+            baseline_straight = st.slider("直路 baseline Y", 0, 200, 55, key="s_base_straight")
+            horse_w = st.slider("馬公仔闊度", 60, 200, 130, key="s_horse_w")
+            horse_h = st.slider("馬公仔高度", 40, 150, 88, key="s_horse_h")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("👀 即時預覽", use_container_width=True):
+                preview_img = draw_pace_map(
+                    edited, race_name, pace_desc, track_type,
+                    col_unit=col_unit, row_unit=row_unit, origin_x=origin_x,
+                    baseline_y_curve=baseline_curve, baseline_y_straight=baseline_straight,
+                    horse_w=horse_w, horse_h=horse_h
+                )
+                st.image(preview_img, use_container_width=True)
+
+        with col_b:
+            if st.button("💾 儲存去雲端（俾出圖用）", use_container_width=True) and gs_client:
+                push_pace_to_gsheet(gs_client, race_name, pace_desc, track_type, edited)
+                st.success(f"已儲存 {race_name} 嘅排位資料！")
+
+    with tab2:
+        race_to_load = st.text_input("輸入場次", value="R6", key="pace_load_race")
+        if st.button("📥 讀取排位資料並出圖", type="primary") and gs_client:
+            with st.spinner("讀取中..."):
+                race_name2, pace_desc2, track_type2, df2, msg = fetch_pace_from_gsheet(gs_client, race_to_load)
+            if df2 is not None:
+                result_img = draw_pace_map(df2, race_name2, pace_desc2, track_type2)
+                buf = io.BytesIO()
+                result_img.save(buf, format="PNG")
+                byte_im = buf.getvalue()
+                st.image(byte_im, caption=f"{race_to_load} 步速圖", use_container_width=True)
+                st.download_button("💾 下載圖片", data=byte_im, file_name=f"PaceMap_{race_to_load}.png", mime="image/png")
+            else:
+                st.error(f"❌ 讀取失敗：{msg}")
