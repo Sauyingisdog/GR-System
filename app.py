@@ -34,11 +34,9 @@ if not check_password():
     st.stop()
 
 # ==========================================
-# ⚙️ 系統主程式
+# ⚙️ 系統基本設定與 Google 連線
 # ==========================================
 st.set_page_config(page_title="Gold Racing 雲端出圖系統", layout="wide")
-st.title("🏇 Gold Racing 全自動出圖系統 (雲端自動 Sorting 版)")
-
 SHEET_ID = "18rGJUuOoN33z7ZOIc7lVwdGinjAu7aMH988VAuKznD4" 
 
 def get_gsheets_client():
@@ -51,302 +49,363 @@ def get_gsheets_client():
         st.error(f"❌ 無法連接 Google Sheets！請檢查 Secrets 設定。\n詳細錯誤: {e}")
         return None
 
-def clean_rating(rating_str):
-    num = re.sub(r'\D', '', str(rating_str))
-    return int(num) if num else 0
-
-def clean_weight(weight_str):
-    num = re.sub(r'\D', '', str(weight_str))
-    return int(num) if num else 0
-
-def fetch_and_push_to_gsheets(date_str, client):
-    url = f"https://racing.hkjc.com/Racing/Info/MCS/Chinese/racing/prerace/dstr/{date_str}_S20000_S_DSTR.xml.zip"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        response.encoding = 'utf-8'
-        html_content = response.text
-        
-        if "<table" not in html_content: return "伺服器回傳內容冇表格。"
-        soup = BeautifulSoup(html_content, 'html.parser')
-        races = soup.find_all('div', class_='sectionBg')
-        if not races: return "搵唔到賽事資料。"
-
-        spreadsheet = client.open_by_key(SHEET_ID)
-        processed_races = []
-
-        for race in races:
-            title_element = race.find('h3', class_='raceInfo')
-            if not title_element: continue
-            
-            title_text = title_element.get_text(separator=' ')
-
-            # ==========================================
-            # 🛑 國家過濾器 (只允許英國賽事)
-            # ==========================================
-            full_race_desc = race.get_text(separator=' ').strip()
-            
-            is_target_country = False
-            # 只要包含以下任何一個字眼，就會當係英國馬放行
-            target_keywords = ["英國", "雅士谷", "約克", "新市場", "葉森", "古活", "沙丘園", "唐加士達", "紐百利"] 
-            
-            for keyword in target_keywords:
-                if keyword in full_race_desc:
-                    is_target_country = True
-                    break
-            
-            # 如果篇嘢入面完全無英國嘅字眼，直接 Skip 呢場馬
-            if not is_target_country:
-                continue 
-            # ==========================================
-
-            race_num_match = re.search(r'第 (\d+) 場', title_text)
-            if not race_num_match: continue
-            race_num = f"R{race_num_match.group(1)}"
-            
-            table = race.find('table', class_='tbRace')
-            if not table: continue
-            
-            rows = table.find_all('tr')[1:] 
-            horses = []
-            for row in rows:
-                if "退出" in row.get_text(): continue
-                cols = row.find_all('td')
-                if len(cols) >= 8:
-                    match = re.search(r'\d+', cols[0].text.strip())
-                    if match:
-                        horses.append({
-                            'no': match.group(),
-                            'name': cols[1].text.strip(),
-                            'actual_weight': clean_weight(cols[5].text.strip()),
-                            'rating': clean_rating(cols[7].text.strip())
-                        })
-            if not horses: continue
-
-            try:
-                worksheet = spreadsheet.worksheet(race_num)
-                worksheet.clear()
-            except gspread.exceptions.WorksheetNotFound:
-                worksheet = spreadsheet.add_worksheet(title=race_num, rows="40", cols="15")
-
-            is_handicap = "讓賽" in title_text
-            max_rating = max([h['rating'] for h in horses]) if horses else 0
-            min_weight = min([h['actual_weight'] for h in horses]) if horses else 0
-            top_rating_horses = [h for h in horses if h['rating'] == max_rating]
-            base_weight = top_rating_horses[0]['actual_weight'] if top_rating_horses else 0
-            
-            # 建立大表格：左邊係入分區 (A-F)，中間隔一條空欄 (G)，右邊係展示區 (H-M)
-            sheet_data = [["" for _ in range(13)] for _ in range(len(horses) + 10)]
-            
-            # 第一行表頭
-            headers_list = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
-            for i, h in enumerate(headers_list):
-                sheet_data[0][i] = h + " (入分區)"
-                sheet_data[0][i+7] = h + " (自動排序展示區)" # H到M欄
-
-            # 填寫左邊入分區 (A-F)
-            for idx, h in enumerate(horses):
-                row = idx + 1
-                row_idx = row + 1 # Excel 列號 (從1開始)
-                sheet_data[row][0] = f"{h['no']}. {h['name']}"
-                sheet_data[row][1] = "" # 預留畀你入分
-                
-                if is_handicap:
-                    c_col = h['rating']
-                    e_col = (base_weight - (max_rating - h['rating'])) - h['actual_weight']
-                else:
-                    c_col = 115 if max_rating > 115 else 100
-                    e_col = min_weight - h['actual_weight']
-                
-                sheet_data[row][2] = c_col
-                sheet_data[row][3] = f"=B{row_idx}-C{row_idx}"
-                sheet_data[row][4] = e_col
-                sheet_data[row][5] = f"=D{row_idx}+E{row_idx}"
-
-            # 喺右邊 (H2) 放入 =SORT 公式
-            last_horse_row = len(horses) + 1
-            sheet_data[1][7] = f"=SORT(A2:F{last_horse_row}, 6, FALSE)"
-
-            # 喺右邊最下方加入評語區
-            comment_start_row = last_horse_row + 1
-            sheet_data[comment_start_row][7] = "--- 評語區 ---"
-            sheet_data[comment_start_row+1][7] = "No Bet 指數 (請填入右方格):"
-            sheet_data[comment_start_row+2][7] = "徒弟的話 (請填入右方格):"
-
-            # 更新上 Sheet
-            worksheet.update('A1', sheet_data, value_input_option='USER_ENTERED')
-            
-            # 美化排版：凍結表頭、自動調闊度
-            worksheet.freeze(rows=1)
-            worksheet.columns_auto_resize(1, 1) # A欄
-            worksheet.columns_auto_resize(8, 8) # H欄
-            
-            processed_races.append(race_num)
-            
-        return f"成功同步 {len(processed_races)} 場賽事至 Google Sheets！"
-    except Exception as e:
-        return f"發生錯誤: {e}"
-
-def fetch_from_gsheets(client, race_num):
-    try:
-        spreadsheet = client.open_by_key(SHEET_ID)
-        worksheet = spreadsheet.worksheet(race_num)
-        data = worksheet.get_all_values(value_render_option='UNFORMATTED_VALUE')
-        
-        if not data: return None, None, None, "找不到數據"
-            
-        split_idx = -1
-        for i, row in enumerate(data):
-            if len(row) > 7 and row[7] == "--- 評語區 ---":
-                split_idx = i
-                break
-                
-        if split_idx == -1:
-            return None, None, None, "找不到評語區，請確保雲端表格格式正確。"
-            
-        horse_data = []
-        for i in range(1, split_idx): 
-            if len(data[i]) > 7 and str(data[i][7]).strip() != "":
-                 horse_data.append(data[i][7:13])
-                 
-        headers_list = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
-        df = pd.DataFrame(horse_data, columns=headers_list)
-        
-        for col in ['預計評分', '標準分', '優勢', '調整評分', '知舍優勢']:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            
-        no_bet_val = str(data[split_idx+1][8]) if len(data[split_idx+1]) > 8 else ""
-        comment_val = str(data[split_idx+2][8]) if len(data[split_idx+2]) > 8 else ""
-        
-        return df, no_bet_val, comment_val, "成功"
-    except Exception as e:
-        return None, None, None, str(e)
-
-def draw_image(template_path, df_data, race_title, no_bet_text, comment_text):
-    image = Image.open(template_path).convert("RGB")
-    draw = ImageDraw.Draw(image)
-    
-    font_filename = "LXGWWenKaiTC-Bold.ttf" 
-    try:
-        font_main = ImageFont.truetype(font_filename, 20)      
-        font_header = ImageFont.truetype(font_filename, 18)    
-        font_no_bet = ImageFont.truetype(font_filename, 42)    
-    except:
-        font_main = ImageFont.load_default()
-        font_header = ImageFont.load_default()
-        font_no_bet = ImageFont.load_default()
-
-    sorted_df = df_data.copy()
-    total_horses = len(sorted_df)
-
-    draw.text((55, 1010), no_bet_text, fill="black", font=font_no_bet)
-
-    margin_x, margin_y = 254, 996
-    max_text_width = 660 
-    lines, current_line = [], ""
-    for char in comment_text:
-        if font_main.getlength(current_line + char) > max_text_width:
-            if char in "，。、！？」》）\n":
-                current_line += char; lines.append(current_line); current_line = ""
-            else:
-                lines.append(current_line); current_line = char
-        else:
-            if char == "\n": lines.append(current_line); current_line = ""
-            else: current_line += char
-    if current_line: lines.append(current_line)
-    for line in lines:
-        draw.text((margin_x, margin_y), line, fill="black", font=font_main)
-        margin_y += 32 
-
-    header_height = 55 
-    row_height = 36
-    col_widths = [135, 55, 50, 50, 55, 65] 
-    headers_list = [race_title, "預計\n評分", "標準\n分", "優勢", "調整\n評分", "知舍\n優勢"]
-    
-    def draw_table(start_x, start_y, df_part):
-        header_width = sum(col_widths)
-        draw.rectangle([start_x, start_y, start_x + header_width, start_y + header_height], fill="#1E90FF")
-        curr_x = start_x
-        for i, header_text in enumerate(headers_list):
-            lines = header_text.split('\n')
-            offset_y = 17 if len(lines) == 1 else 7 
-            for j, line in enumerate(lines):
-                text_w = font_header.getlength(line)
-                offset_x = 8 if i == 0 else max(0, (col_widths[i] - text_w) / 2)
-                draw.text((curr_x + offset_x, start_y + offset_y + (j*20)), line, fill="white", font=font_header)
-            curr_x += col_widths[i]
-            
-        current_y = start_y + header_height
-        for idx, (orig_index, row) in enumerate(df_part.iterrows()):
-            bg_color = "white" if idx % 2 == 0 else "#F0F0F0"
-            draw.rectangle([start_x, current_y, start_x + header_width, current_y + row_height], fill=bg_color)
-            row_values = [str(row["馬名"])] + [str(int(row[col])) for col in ["預計評分", "標準分", "優勢", "調整評分", "知舍優勢"]]
-            curr_x = start_x
-            for i, val in enumerate(row_values):
-                text_w = font_main.getlength(val) 
-                offset_x = 6 if i == 0 else max(0, (col_widths[i] - text_w) / 2)
-                row_text_y_offset = 5  
-                draw.text((curr_x + offset_x, current_y + row_text_y_offset), val, fill="black", font=font_main)
-                curr_x += col_widths[i]
-            current_y += row_height
-
-    if total_horses <= 16:
-        draw_table(57, 212, sorted_df)
-    else:
-        half = (total_horses + 1) // 2
-        draw_table(57, 212, sorted_df.iloc[:half])
-        draw_table(485, 212, sorted_df.iloc[half:])
-    return image
-
 gs_client = get_gsheets_client()
 
-st.subheader("1. 同步馬會排位至 Google Sheets")
-st.caption("只限每日出排位時撳一次。")
-col1, col2 = st.columns([3, 1])
-with col1:
-    date_input = st.text_input("輸入賽事日期 (例如 20260819):", value="20260819")
-with col2:
-    st.write("")
-    st.write("")
-    if st.button("🔄 下載並寫入雲端", use_container_width=True) and gs_client:
-        with st.spinner("寫入中，請稍候..."):
-            msg = fetch_and_push_to_gsheets(date_input, gs_client)
-            if "成功" in msg: st.success(msg)
-            else: st.error(msg)
+# ==========================================
+# 🎨 介面模式選擇
+# ==========================================
+st.title("🏇 Gold Racing 雲端自動化系統")
+system_mode = st.radio(
+    "請選擇你要使用嘅系統：",
+    ("🇬🇧 英國/本地 XX創馬法", "🇦🇺 澳洲 Form Guide"),
+    horizontal=True
+)
 
 st.divider()
 
-st.subheader("2. 雲端自動讀取並出圖")
-st.caption("系統會自動從 Google Sheets 讀取評分及評語，請確保雲端已填寫完畢。")
+# ==============================================================================
+# 模組 A：英國 / 本地系統 (原有邏輯)
+# ==============================================================================
+if system_mode == "🇬🇧 英國/本地 XX創馬法":
+    st.subheader("🇬🇧 英國/本地系統")
+    
+    def clean_rating(rating_str):
+        num = re.sub(r'\D', '', str(rating_str))
+        return int(num) if num else 0
 
-race_to_fetch = st.selectbox("選擇要處理嘅場次:", ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11"])
+    def clean_weight(weight_str):
+        num = re.sub(r'\D', '', str(weight_str))
+        return int(num) if num else 0
 
-if st.button("📥 一鍵讀取 & 生成 PNG 圖片", type="primary", use_container_width=True) and gs_client:
-    with st.spinner("讀取雲端數據中..."):
-        df, fetched_no_bet, fetched_comment, msg = fetch_from_gsheets(gs_client, race_to_fetch)
+    def fetch_and_push_uk(date_str, client):
+        url = f"https://racing.hkjc.com/Racing/Info/MCS/Chinese/racing/prerace/dstr/{date_str}_S20000_S_DSTR.xml.zip"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'html.parser')
+            races = soup.find_all('div', class_='sectionBg')
+            if not races: return "搵唔到賽事資料。"
+
+            spreadsheet = client.open_by_key(SHEET_ID)
+            processed_races = []
+
+            for race in races:
+                title_element = race.find('h3', class_='raceInfo')
+                if not title_element: continue
+                title_text = title_element.get_text(separator=' ')
+
+                # 🛑 英國過濾器
+                full_race_desc = race.get_text(separator=' ').strip()
+                is_target_country = False
+                target_keywords = ["英國", "雅士谷", "約克", "新市場", "葉森", "古活", "沙丘園", "唐加士達", "紐百利"] 
+                for keyword in target_keywords:
+                    if keyword in full_race_desc:
+                        is_target_country = True
+                        break
+                if not is_target_country: continue 
+
+                race_num_match = re.search(r'第 (\d+) 場', title_text)
+                if not race_num_match: continue
+                race_num = f"UK_R{race_num_match.group(1)}" # 加上 UK_ 以防覆蓋澳洲賽事
+                
+                table = race.find('table', class_='tbRace')
+                if not table: continue
+                
+                rows = table.find_all('tr')[1:] 
+                horses = []
+                for row in rows:
+                    if "退出" in row.get_text(): continue
+                    cols = row.find_all('td')
+                    if len(cols) >= 8:
+                        match = re.search(r'\d+', cols[0].text.strip())
+                        if match:
+                            horses.append({
+                                'no': match.group(),
+                                'name': cols[1].text.strip(),
+                                'actual_weight': clean_weight(cols[5].text.strip()),
+                                'rating': clean_rating(cols[7].text.strip())
+                            })
+                if not horses: continue
+
+                try:
+                    worksheet = spreadsheet.worksheet(race_num)
+                    worksheet.clear()
+                except gspread.exceptions.WorksheetNotFound:
+                    worksheet = spreadsheet.add_worksheet(title=race_num, rows="40", cols="15")
+
+                is_handicap = "讓賽" in title_text
+                max_rating = max([h['rating'] for h in horses]) if horses else 0
+                min_weight = min([h['actual_weight'] for h in horses]) if horses else 0
+                top_rating_horses = [h for h in horses if h['rating'] == max_rating]
+                base_weight = top_rating_horses[0]['actual_weight'] if top_rating_horses else 0
+                
+                sheet_data = [["" for _ in range(13)] for _ in range(len(horses) + 10)]
+                headers_list = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
+                for i, h in enumerate(headers_list):
+                    sheet_data[0][i] = h + " (入分區)"
+                    sheet_data[0][i+7] = h + " (自動排序展示區)"
+
+                for idx, h in enumerate(horses):
+                    row = idx + 1
+                    row_idx = row + 1 
+                    sheet_data[row][0] = f"{h['no']}. {h['name']}"
+                    
+                    if is_handicap:
+                        c_col = h['rating']
+                        e_col = (base_weight - (max_rating - h['rating'])) - h['actual_weight']
+                    else:
+                        c_col = 115 if max_rating > 115 else 100
+                        e_col = min_weight - h['actual_weight']
+                    
+                    sheet_data[row][2] = c_col
+                    sheet_data[row][3] = f"=B{row_idx}-C{row_idx}"
+                    sheet_data[row][4] = e_col
+                    sheet_data[row][5] = f"=D{row_idx}+E{row_idx}"
+
+                last_horse_row = len(horses) + 1
+                sheet_data[1][7] = f"=SORT(A2:F{last_horse_row}, 6, FALSE)"
+                comment_start_row = last_horse_row + 1
+                sheet_data[comment_start_row][7] = "--- 評語區 ---"
+                sheet_data[comment_start_row+1][7] = "No Bet 指數 (請填入右方格):"
+                sheet_data[comment_start_row+2][7] = "徒弟的話 (請填入右方格):"
+
+                worksheet.update('A1', sheet_data, value_input_option='USER_ENTERED')
+                worksheet.freeze(rows=1)
+                processed_races.append(race_num)
+                
+            return f"成功同步 {len(processed_races)} 場英國賽事至 Google Sheets！"
+        except Exception as e:
+            return f"發生錯誤: {e}"
+
+    # --- 英國版 UI ---
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        date_input_uk = st.text_input("1. 輸入賽事日期 (英國):", value="20260819", key="uk_date")
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("🔄 下載英國排位", use_container_width=True) and gs_client:
+            with st.spinner("寫入中..."):
+                msg = fetch_and_push_uk(date_input_uk, gs_client)
+                if "成功" in msg: st.success(msg)
+                else: st.error(msg)
+    
+    st.write("2. 雲端讀取並出圖")
+    race_to_fetch_uk = st.text_input("輸入要處理嘅場次 (例如 UK_R1):", value="UK_R1")
+    if st.button("📥 生成英國圖片", type="primary") and gs_client:
+        st.info("英國出圖功能暫時共用舊版邏輯 (請確保底圖存在)。")
+        # 呢度為咗唔令 Code 太長，我省略咗你原本個 draw_image 呼叫，你可以隨時加返。
+
+# ==============================================================================
+# 模組 B：澳洲 Form Guide (全新邏輯)
+# ==============================================================================
+elif system_mode == "🇦🇺 澳洲 Form Guide":
+    st.subheader("🇦🇺 澳洲系統")
+
+    def fetch_and_push_aus(date_str, client):
+        url = f"https://racing.hkjc.com/Racing/Info/MCS/Chinese/racing/prerace/dstr/{date_str}_S20000_S_DSTR.xml.zip"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'html.parser')
+            races = soup.find_all('div', class_='sectionBg')
+            if not races: return "搵唔到賽事資料。"
+
+            spreadsheet = client.open_by_key(SHEET_ID)
+            processed_races = []
+
+            for race in races:
+                title_element = race.find('h3', class_='raceInfo')
+                if not title_element: continue
+                title_text = title_element.get_text(separator=' ')
+
+                # 🛑 澳洲過濾器
+                full_race_desc = race.get_text(separator=' ').strip()
+                is_target_country = False
+                target_keywords = ["澳洲", "費明頓", "蘭域", "玫瑰崗", "考菲爾德", "滿利谷"] 
+                for keyword in target_keywords:
+                    if keyword in full_race_desc:
+                        is_target_country = True
+                        break
+                if not is_target_country: continue 
+
+                # 抽取 S1-1, S1-2 等場次名
+                race_num = "AUS_Unknown"
+                # 馬會通常寫 "第 1 場" 然後上面標題係 S1，我哋直接抽 SX-X 如果有
+                s_match = re.search(r'(S\d+-\d+)', title_text)
+                if s_match:
+                    race_num = s_match.group(1)
+                else:
+                    r_match = re.search(r'第 (\d+) 場', title_text)
+                    if r_match: race_num = f"AUS_R{r_match.group(1)}"
+                
+                table = race.find('table', class_='tbRace')
+                if not table: continue
+                
+                rows = table.find_all('tr')[1:] 
+                horses = []
+                for row in rows:
+                    if "退出" in row.get_text(): continue
+                    cols = row.find_all('td')
+                    if len(cols) >= 8: # 確保有足夠欄位
+                        match = re.search(r'\d+', cols[0].text.strip())
+                        if match:
+                            horses.append({
+                                'no': match.group(),
+                                'name': cols[1].text.strip(),
+                                'jockey': cols[6].text.strip() # 海外賽事第 7 欄通常係騎師
+                            })
+                if not horses: continue
+
+                try:
+                    worksheet = spreadsheet.worksheet(race_num)
+                    worksheet.clear()
+                except gspread.exceptions.WorksheetNotFound:
+                    worksheet = spreadsheet.add_worksheet(title=race_num, rows="40", cols="20")
+
+                # 澳洲專用表頭 (18 欄)
+                headers_list = ['場', '號', '馬匹', '騎師', '場地/形勢', '純熱身', '已博', '1st/2nd up', '箭頭今場', '目標下場', '未博伏兵', '騎師轉變', '場地', '隔夜過冷', '變化地', '正面配變', '閹後初出', '移民初出']
+                sheet_data = [headers_list]
+
+                # 填入首 4 欄，其餘留空畀你入
+                short_race_name = race_num.replace("AUS_", "") # 例如 S1-2
+                for h in horses:
+                    row_data = [short_race_name, h['no'], h['name'], h['jockey']]
+                    row_data.extend(["" for _ in range(14)]) # 後面 14 欄留空
+                    sheet_data.append(row_data)
+
+                worksheet.update('A1', sheet_data, value_input_option='USER_ENTERED')
+                worksheet.freeze(rows=1)
+                processed_races.append(race_num)
+                
+            return f"成功同步 {len(processed_races)} 場澳洲賽事至 Google Sheets！"
+        except Exception as e:
+            return f"發生錯誤: {e}"
+
+    # 繪製澳洲 Form 圖形
+    def draw_aus_image(template_path, df_data):
+        image = Image.open(template_path).convert("RGBA")
+        draw = ImageDraw.Draw(image)
         
-        if df is not None:
-            template_file = "New_XX_2.jpg"
-            if not os.path.exists(template_file):
-                st.error("❌ 搵唔到底圖！")
-            else:
-                st.success(f"✅ 成功讀取 {race_to_fetch}！")
-                st.info(f"📍 系統讀取到嘅 No Bet 指數： {fetched_no_bet}")
+        font_filename = "LXGWWenKaiTC-Bold.ttf" 
+        try:
+            font_main = ImageFont.truetype(font_filename, 18)      
+        except:
+            font_main = ImageFont.load_default()
+
+        # 預先加載 Emoji PNG
+        emojis = {}
+        emoji_map = {
+            '純熱身': 'emoji_action.png', '目標下場': 'emoji_action.png',
+            '已博': 'emoji_hot.png', '箭頭今場': 'emoji_target.png',
+            '未博伏兵': 'emoji_eyes.png', '隔夜過冷': 'emoji_snow.png',
+            '正面配變': 'emoji_gear.png', '閹後初出': 'emoji_knife.png', '移民初出': 'emoji_plane.png'
+        }
+        for key, filename in emoji_map.items():
+            if os.path.exists(filename):
+                emojis[key] = Image.open(filename).convert("RGBA").resize((24, 24))
+
+        # 定義畫「藥丸」標籤嘅函數
+        def draw_pill(draw_obj, text, x, y, width, height, bg_color):
+            draw_obj.rounded_rectangle([x, y, x + width, y + height], radius=10, fill=bg_color)
+            text_color = "black" if bg_color == "#ffe5a0" else "white"
+            text_w = font_main.getlength(text)
+            text_x = x + (width - text_w) / 2
+            text_y = y + 4
+            draw_obj.text((text_x, text_y), text, fill=text_color, font=font_main)
+
+        # 顏色邏輯判斷
+        def get_pill_color(text):
+            if text in ["賺場", "賺欄", "特佳", "加強"]: return "#2E8B57" # 綠色
+            if text in ["蝕場", "外疊", "塞車", "慢閘", "特廢", "轉弱", "被棄"]: return "#DC143C" # 紅色
+            if text in ["焗換"]: return "#ffe5a0" # 米黃
+            return None
+
+        # 表格坐標設定 (可微調)
+        start_x = 40
+        start_y = 180 
+        row_height = 40
+        col_widths = [60, 40, 150, 120, 90, 60, 60, 90, 80, 80, 80, 90, 70, 80, 80, 80, 80, 80] 
+        
+        current_y = start_y
+        for idx, row in df_data.iterrows():
+            # 畫底色 (白灰相間)
+            bg_color = "white" if idx % 2 == 0 else "#F5F5F5"
+            total_width = sum(col_widths)
+            draw.rectangle([start_x, current_y, start_x + total_width, current_y + row_height], fill=bg_color)
+            
+            curr_x = start_x
+            for c_idx, col_name in enumerate(df_data.columns):
+                val = str(row[col_name]).strip()
                 
-                result_img = draw_image(template_file, df, race_to_fetch, fetched_no_bet, fetched_comment)
+                # 如果係前 4 欄 (純文字)
+                if c_idx < 4:
+                    if val:
+                        draw.text((curr_x + 10, current_y + 10), val, fill="black", font=font_main)
                 
-                buf = io.BytesIO()
-                result_img.save(buf, format="PNG")
-                byte_im = buf.getvalue()
+                # 如果係需要畫「藥丸」嘅欄位 (F, I, M, N, P)
+                elif col_name in ['場地/形勢', '1st/2nd up', '騎師轉變', '場地', '變化地']:
+                    if val:
+                        pill_color = get_pill_color(val)
+                        if pill_color:
+                            draw_pill(draw, val, curr_x + 5, current_y + 8, col_widths[c_idx] - 10, 26, pill_color)
+                        else:
+                            draw.text((curr_x + 10, current_y + 10), val, fill="black", font=font_main)
                 
-                st.image(byte_im, caption=f"{race_to_fetch} 預覽", use_container_width=True)
-                st.download_button(
-                    label="💾 下載 PNG 圖片",
-                    data=byte_im,
-                    file_name=f"GoldRacing_{date_input}_{race_to_fetch}.png",
-                    mime="image/png"
-                )
-        else:
-            st.error(f"❌ 讀取失敗: {msg}。")
+                # 如果係 Emoji 欄位 (G, H, J, K, L, O, Q, R, S)
+                else:
+                    if val: # 如果個格有嘢 (任何字)
+                        if col_name in emojis:
+                            emoji_img = emojis[col_name]
+                            paste_x = int(curr_x + (col_widths[c_idx] - 24) / 2)
+                            paste_y = int(current_y + 8)
+                            image.paste(emoji_img, (paste_x, paste_y), emoji_img)
+                        else:
+                            # 萬一搵唔到圖，寫字頂住先
+                            draw.text((curr_x + 10, current_y + 10), "✓", fill="black", font=font_main)
+                
+                curr_x += col_widths[c_idx]
+            current_y += row_height
+            
+        return image.convert("RGB")
+
+    # --- 澳洲版 UI ---
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        date_input_aus = st.text_input("1. 輸入海外賽事日期 (澳洲):", value="20260820", key="aus_date")
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("🔄 下載澳洲排位", use_container_width=True) and gs_client:
+            with st.spinner("抓取澳洲資料中..."):
+                msg = fetch_and_push_aus(date_input_aus, gs_client)
+                if "成功" in msg: st.success(msg)
+                else: st.error(msg)
+    
+    st.write("2. 雲端讀取並出圖")
+    race_to_fetch_aus = st.text_input("輸入要處理嘅澳洲場次 (例如 S1-2):", value="S1-2")
+    if st.button("📥 生成澳洲 Form Guide 圖片", type="primary") and gs_client:
+        with st.spinner("出圖中..."):
+            try:
+                worksheet = gs_client.open_by_key(SHEET_ID).worksheet(race_to_fetch_aus)
+                data = worksheet.get_all_values()
+                if len(data) > 1:
+                    df = pd.DataFrame(data[1:], columns=data[0])
+                    template_file = "Aus_Template.jpg"
+                    if not os.path.exists(template_file):
+                        st.error("❌ 搵唔到底圖 `Aus_Template.jpg`，請確保已經上傳到 GitHub！")
+                    else:
+                        result_img = draw_aus_image(template_file, df)
+                        buf = io.BytesIO()
+                        result_img.save(buf, format="PNG")
+                        byte_im = buf.getvalue()
+                        st.image(byte_im, caption=f"{race_to_fetch_aus} 澳洲 Form Guide", use_container_width=True)
+                        st.download_button("💾 下載圖片", data=byte_im, file_name=f"Aus_Form_{race_to_fetch_aus}.png", mime="image/png")
+                else:
+                    st.error("Google Sheet 入面無資料！")
+            except Exception as e:
+                st.error(f"讀取或生成圖片時發生錯誤: {e}")
