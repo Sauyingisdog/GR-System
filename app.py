@@ -487,22 +487,19 @@ def init_grid_by_draw(horses_df, num_cols=8, num_rows=4):
       horses_sorted = horses_df.sort_values('檔位').reset_index(drop=True)
       grid_data = [["" for _ in range(num_cols)] for _ in range(num_rows)]
   
-+     # 固定用最左4條column（Col1~Col4），上限14隻馬（4columns x 4rows = 16格，夠用）
-+     max_col_used = 4
-+ 
+     # 固定用最左4條column（Col1~Col4），上限14隻馬（4columns x 4rows = 16格，夠用）
+     max_col_used = 4
+ 
       for idx, horse in horses_sorted.iterrows():
--         col_position = idx // num_rows
--         row_position_from_bottom = idx % num_rows
-+         col_position = idx // num_rows                # 0,0,0,0,1,1,1,1,2,2,2,2,3,3...
-+         row_position_from_bottom = idx % num_rows      # 0,1,2,3,0,1,2,3...
+         col_position = idx // num_rows                # 0,0,0,0,1,1,1,1,2,2,2,2,3,3...
+         row_position_from_bottom = idx % num_rows      # 0,1,2,3,0,1,2,3...
   
           display_row = num_rows - 1 - row_position_from_bottom
--         display_col = col_position
-+         display_col = (max_col_used - 1) - col_position  # 由Col4開始，逐步往Col1填（右至左）
+         display_col = (max_col_used - 1) - col_position  # 由Col4開始，逐步往Col1填（右至左）
   
--         if display_col < num_cols:
-+         if 0 <= display_col < num_cols:
+         if 0 <= display_col < num_cols:
               grid_data[display_row][display_col] = str(int(horse['馬號']))
+
     col_names = [f"Col{i+1}" for i in range(num_cols)]
     grid_df = pd.DataFrame(grid_data, columns=col_names)
     return grid_df
@@ -536,7 +533,7 @@ def detect_position_conflicts(horse_list_df):
 
 
 def draw_pace_map(df, race_name, pace_desc, track_type,
-                   col_unit=168, row_unit=145, origin_x=60,
+                   col_unit=16, row_unit=145, origin_x=60,
                    baseline_y_curve=665, baseline_y_straight=75,
                    horse_w=158, horse_h=105, row_gap=5):
     template_file = "backgroundstraight.jpg" if track_type == "直路" else "background.jpg"
