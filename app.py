@@ -689,7 +689,7 @@ def fetch_and_push_aus(date_str, client):
         spreadsheet = client.open_by_key(SHEET_ID)
         processed_races = []
 
-for table in tables:
+        for table in tables:
             race_num, info_text, country = extract_race_name_and_info(table)
             
             is_target = (country == "澳洲")
