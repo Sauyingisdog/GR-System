@@ -112,16 +112,11 @@ def fetch_and_push_uk(date_str, client):
         spreadsheet = client.open_by_key(SHEET_ID)
         processed_races = []
 
-        for table in tables:
-            race_num, info_text = extract_race_name_and_info(table)
+for table in tables:
+            race_num, info_text, country = extract_race_name_and_info(table)
             
-            is_target_country = False
-            target_keywords = ["英國", "雅士谷", "約克", "新市場", "葉森", "古活", "沙丘園", "唐加士達", "紐百利"] 
-            for keyword in target_keywords:
-                if keyword in info_text:
-                    is_target_country = True
-                    break
-            if not is_target_country: continue 
+            is_target_country = (country == "英國")
+            if not is_target_country: continue
 
             rows = table.find_all('tr')[1:] 
             horses = []
@@ -694,13 +689,11 @@ def fetch_and_push_aus(date_str, client):
         spreadsheet = client.open_by_key(SHEET_ID)
         processed_races = []
 
-        for table in tables:
-            race_num, info_text = extract_race_name_and_info(table)
+for table in tables:
+            race_num, info_text, country = extract_race_name_and_info(table)
             
-            is_target = False
-            for kw in ["澳洲", "費明頓", "蘭域", "玫瑰崗", "考菲爾德", "滿利谷"]:
-                if kw in info_text: is_target = True; break
-            if not is_target: continue 
+            is_target = (country == "澳洲")
+            if not is_target: continue
             
             rows = table.find_all('tr')[1:] 
             horses = []
