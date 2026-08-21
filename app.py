@@ -1125,22 +1125,12 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
     font_race = load_font(cfg["font_size"])
     draw_centered_text(race_info, cfg["center_x"], cfg["center_y"], font_race, cfg["color"])
 
-    # ---- 2. 騎師王 ----
-    cfg_label = CONFIG["jockey_label"]
-    font_jockey_label = load_font(cfg_label["font_size"])
-    draw_left_text(cfg_label["text"], cfg_label["x"], cfg_label["center_y"], font_jockey_label, cfg_label["color"])
-
     cfg_photo = CONFIG["jockey_photo"]
     paste_photo(jockey_img, cfg_photo["center_x"], cfg_photo["center_y"], cfg_photo["width"], cfg_photo["height"])
 
     cfg_name = CONFIG["jockey_name"]
     font_jockey_name = load_font(cfg_name["font_size"])
     draw_left_text(jockey_name, cfg_name["x"], cfg_name["center_y"], font_jockey_name, cfg_name["color"])
-
-    # ---- 3. 練馬師王 ----
-    cfg_label2 = CONFIG["trainer_label"]
-    font_trainer_label = load_font(cfg_label2["font_size"])
-    draw_left_text(cfg_label2["text"], cfg_label2["x"], cfg_label2["center_y"], font_trainer_label, cfg_label2["color"])
 
     cfg_photo2 = CONFIG["trainer_photo"]
     paste_photo(trainer_img, cfg_photo2["center_x"], cfg_photo2["center_y"], cfg_photo2["width"], cfg_photo2["height"])
