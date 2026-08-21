@@ -1057,12 +1057,12 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
         "jockey_name": {
             "font_size": 48,
             "x": 660,       # 名字文字方塊嘅左邊起點 (相右邊)
-            "center_y": 655,
+            "center_y": 650,
             "color": "black",
         },
         "jockey_photo": {
             "center_x": 505,   # 相嘅水平中心點
-            "center_y": 655,
+            "center_y": 645,
             "width": 175,
             "height": 175,
         },
