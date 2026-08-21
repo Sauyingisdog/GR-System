@@ -1041,7 +1041,7 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
     CONFIG = {
         # 第一個框：馬匹推介
         "race_info": {
-            "font_size": 42,
+            "font_size": 82,
             "center_x": 500,   # 框嘅水平中心點
             "center_y": 390,   # 框嘅垂直中心點
             "color": "black",
