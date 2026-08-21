@@ -112,7 +112,7 @@ def fetch_and_push_uk(date_str, client):
         spreadsheet = client.open_by_key(SHEET_ID)
         processed_races = []
 
-            for table in tables:
+        for table in tables:
             race_num, info_text, country = extract_race_name_and_info(table)
             
             is_target_country = (country == "英國")
