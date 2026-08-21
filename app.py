@@ -1041,7 +1041,7 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
     CONFIG = {
         # 第一個框：馬匹推介
         "race_info": {
-            "font_size": 82,
+            "font_size": 70,
             "center_x": 500,   # 框嘅水平中心點
             "center_y": 390,   # 框嘅垂直中心點
             "color": "black",
@@ -1055,8 +1055,8 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
             "color": "black",
         },
         "jockey_name": {
-            "font_size": 40,
-            "x": 720,       # 名字文字方塊嘅左邊起點 (相右邊)
+            "font_size": 48,
+            "x": 660,       # 名字文字方塊嘅左邊起點 (相右邊)
             "center_y": 655,
             "color": "black",
         },
@@ -1075,7 +1075,7 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
             "color": "black",
         },
         "trainer_name": {
-            "font_size": 40,
+            "font_size": 48,
             "x": 660,
             "center_y": 905,
             "color": "black",
