@@ -1318,7 +1318,7 @@ def race_day_intro_ui():
         result_img.save(buf, format="PNG")
         byte_im = buf.getvalue()
 
-st.image(byte_im, caption="賽日推介預覽", use_container_width=True)
+        st.image(byte_im, caption="賽日推介預覽", use_container_width=True)
         st.download_button(
             "💾 下載圖片",
             data=byte_im,
