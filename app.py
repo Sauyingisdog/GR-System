@@ -1235,7 +1235,7 @@ def race_day_intro_ui():
 st.title("🏇 Gold Racing 雲端自動化系統")
 system_mode = st.radio(
     "請選擇你要使用嘅系統：",
-    ("🇬🇧 英國/本地 XX創馬法", "🇦🇺 澳洲 Form Guide", "📊 步速圖"),
+    ("🇬🇧 英國/本地 XX創馬法", "🇦🇺 澳洲 Form Guide", "📊 步速圖", "📢 賽日推介"),
     horizontal=True
 )
 st.divider()
