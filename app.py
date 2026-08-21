@@ -119,8 +119,6 @@ def fetch_and_push_uk(date_str, client):
         for table in tables:
             race_num, info_text, country = extract_race_name_and_info(table)
             
-            st.write(f"🔍 Debug - race_num: {race_num} | country: '{country}' | info_text: {info_text}")
-            
             is_target_country = (country == "英國")
             if not is_target_country: continue
 
