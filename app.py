@@ -1062,7 +1062,7 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
         },
         "jockey_photo": {
             "center_x": 505,   # 相嘅水平中心點
-            "center_y": 645,
+            "center_y": 647,
             "width": 175,
             "height": 175,
         },
@@ -1076,7 +1076,7 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
         },
         "trainer_name": {
             "font_size": 48,
-            "x": 660,
+            "x": 657,
             "center_y": 905,
             "color": "black",
         },
