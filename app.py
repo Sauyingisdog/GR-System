@@ -85,10 +85,14 @@ def extract_race_name_and_info(table):
     
     # 🌟 新增：從 info_text 入面精準攞返「國家」呢個獨立欄位
     # 格式固定係：跑道,距離,國家,獎金 (例如：草地,1200 米,澳洲,澳元 300,000)
+# 🌟 修正：唔再靠固定index，改為搵「XXX 米」呢個part之後嗰個part（即係國家）
     country = ""
     parts = [p.strip() for p in info_text.split(',')]
-    if len(parts) >= 3:
-        country = parts[2]
+    for i, part in enumerate(parts):
+        if re.search(r'\d+\s*米', part):
+            if i + 1 < len(parts):
+                country = parts[i + 1]
+            break
         
     return race_name, info_text, country
     
