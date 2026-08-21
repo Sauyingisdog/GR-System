@@ -1056,7 +1056,7 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
         },
         "jockey_name": {
             "font_size": 48,
-            "x": 660,       # 名字文字方塊嘅左邊起點 (相右邊)
+            "x": 655,       # 名字文字方塊嘅左邊起點 (相右邊)
             "center_y": 650,
             "color": "black",
         },
@@ -1076,7 +1076,7 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
         },
         "trainer_name": {
             "font_size": 48,
-            "x": 657,
+            "x": 655,
             "center_y": 905,
             "color": "black",
         },
