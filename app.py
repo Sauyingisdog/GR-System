@@ -144,11 +144,21 @@ def fetch_and_push_uk(date_str, client):
             except gspread.exceptions.WorksheetNotFound:
                 worksheet = spreadsheet.add_worksheet(title=race_num, rows="40", cols="15")
 
-            is_handicap = "讓賽" in info_text
             max_rating = max([h['rating'] for h in horses]) if horses else 0
             min_weight = min([h['actual_weight'] for h in horses]) if horses else 0
             top_rating_horses = [h for h in horses if h['rating'] == max_rating]
             base_weight = top_rating_horses[0]['actual_weight'] if top_rating_horses else 0
+
+            # 🌟 修正：用「評分差距 vs 負磅差距」是否一致，去判斷讓磅賽/平磅賽
+            # 如果超過一半馬匹嘅評分差距同負磅差距唔一致，就當平磅賽處理
+            mismatch_count = 0
+            for h in horses:
+                rating_diff = max_rating - h['rating']
+                weight_diff = base_weight - h['actual_weight']
+                if rating_diff != weight_diff:
+                    mismatch_count += 1
+
+            is_handicap = mismatch_count <= (len(horses) / 2)
             
             sheet_data = [["" for _ in range(13)] for _ in range(len(horses) + 10)]
             headers_list = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
