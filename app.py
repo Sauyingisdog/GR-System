@@ -62,6 +62,11 @@ def clean_rating(rating_str):
     num = re.sub(r'\D', '', str(rating_str))
     return int(num) if num else 0
 
+def clean_jockey_name(jockey_str):
+    # 移除括號註記，例如 (a), (-3), (-5) 等見習/減磅標記
+    cleaned = re.sub(r'\([^)]*\)', '', str(jockey_str))
+    return cleaned.strip()
+    
 def extract_race_name_and_info(table):
     s_node = table.find_previous('div', attrs={'data-flag': 'OverseasRaces'})
     s_prefix = s_node.get('idx') if s_node and s_node.get('idx') else None
@@ -720,7 +725,7 @@ def fetch_and_push_aus(date_str, client):
                         horses.append({
                             'no': match.group(),
                             'name': cols[1].text.strip(),
-                            'jockey': cols[6].text.strip()
+                            'jockey': clean_jockey_name(cols[6].text)
                         })
             if not horses: continue
 
