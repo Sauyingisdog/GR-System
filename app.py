@@ -74,18 +74,24 @@ def extract_race_name_and_info(table):
         
     race_name = f"{s_prefix}-{race_num}" if s_prefix else f"R{race_num}"
     
+    # 🌟 修正：直接搵返呢場賽事自己嘅 sectionBg，再攞佢自己嘅 h3.raceInfo
+    # 而唔係靠 divRaceTop（會夾雜同一組入面多場賽事嘅文字）
     info_text = ""
-    if s_prefix:
-        h2 = table.find_previous('h2', class_='meetingInfo')
-        if h2: info_text += h2.get_text(separator=' ')
-        div_top = table.find_previous('div', class_='divRaceTop')
-        if div_top: info_text += div_top.get_text(separator=' ')
-    else:
-        bg = table.find_previous('div', class_='sectionBg')
-        if bg: info_text += bg.get_text(separator=' ')
+    own_section = table.find_previous('div', class_='sectionBg')
+    if own_section:
+        race_info_h3 = own_section.find('h3', class_='raceInfo')
+        if race_info_h3:
+            info_text = race_info_h3.get_text(separator=',')
+    
+    # 🌟 新增：從 info_text 入面精準攞返「國家」呢個獨立欄位
+    # 格式固定係：跑道,距離,國家,獎金 (例如：草地,1200 米,澳洲,澳元 300,000)
+    country = ""
+    parts = [p.strip() for p in info_text.split(',')]
+    if len(parts) >= 3:
+        country = parts[2]
         
-    return race_name, info_text
-
+    return race_name, info_text, country
+    
 # ==========================================
 # 🇬🇧 英國/本地系統核心函數
 # ==========================================
