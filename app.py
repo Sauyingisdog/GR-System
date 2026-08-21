@@ -1047,13 +1047,6 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
             "color": "black",
         },
         # 第二個框：騎師王
-        "jockey_label": {
-            "text": "騎師王",
-            "font_size": 34,
-            "x": 145,
-            "center_y": 650,
-            "color": "black",
-        },
         "jockey_name": {
             "font_size": 48,
             "x": 655,       # 名字文字方塊嘅左邊起點 (相右邊)
@@ -1067,13 +1060,6 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
             "height": 175,
         },
         # 第三個框：練馬師王
-        "trainer_label": {
-            "text": "練馬師王",
-            "font_size": 34,
-            "x": 110,
-            "center_y": 905,
-            "color": "black",
-        },
         "trainer_name": {
             "font_size": 48,
             "x": 655,
