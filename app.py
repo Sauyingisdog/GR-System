@@ -448,6 +448,7 @@ def fetch_and_push_pace_raw(date_str, client):
             safe_gsheet_call(worksheet.update, 'A1', full_data, value_input_option='USER_ENTERED')
 
             processed_races.append(race_name)
+            time.sleep(2)  # 每場之間停2秒，減低寫入密度，避免撞quota
 
         if not processed_races:
             return "❌ 搵唔到本地(沙田/跑馬地)賽事資料。"
