@@ -140,12 +140,18 @@ def fetch_and_push_uk(date_str, client):
 
         spreadsheet = client.open_by_key(SHEET_ID)
         processed_races = []
+        seen_race_nums = set()
 
         for table in tables:
             race_num, info_text, country = extract_race_name_and_info(table)
             
+            if race_num in seen_race_nums:
+                continue  # 🌟 已經處理過呢場，跳過避免重複
+            
             is_target_country = (country == "英國")
-            if not is_target_country: continue
+            if not is_target_country: continue 
+            
+            seen_race_nums.add(race_num)
 
             rows = table.find_all('tr')[1:] 
             horses = []
@@ -728,12 +734,18 @@ def fetch_and_push_aus(date_str, client):
 
         spreadsheet = client.open_by_key(SHEET_ID)
         processed_races = []
+        seen_race_nums = set()
 
         for table in tables:
             race_num, info_text, country = extract_race_name_and_info(table)
             
+            if race_num in seen_race_nums:
+                continue  # 🌟 已經處理過呢場，跳過避免重複
+            
             is_target = (country == "澳洲")
-            if not is_target: continue
+            if not is_target: continue 
+            
+            seen_race_nums.add(race_num)
             
             rows = table.find_all('tr')[1:] 
             horses = []
