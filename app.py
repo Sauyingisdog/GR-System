@@ -1090,3 +1090,240 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
 
 elif system_mode == "📊 步速圖":
     pace_map_ui(gs_client)
+
+# ==========================================
+# 📢 賽日推介 核心函數
+# ==========================================
+
+# 🌟 騎師名單 (22人)
+JOCKEY_LIST = [
+    "艾兆禮", "巴度", "艾道拿", "周俊樂", "何澤堯", "黃智弘", "班德禮", "布文",
+    "巫顯東", "袁幸堯", "奧爾民", "梁家俊", "田泰安", "霍宏聲", "希威森", "蔡明紹",
+    "潘明輝", "楊明綸", "黃寶妮", "金誠剛", "鍾易禮", "潘頓"
+]
+
+# 🌟 練馬師名單 (23人)
+TRAINER_LIST = [
+    "告東尼", "桂福特", "方嘉柏", "葉楚航", "沈集成", "鄭俊偉", "大衛希斯", "游達榮",
+    "賀賢", "韋達", "羅富全", "甘敏斯", "黎昭昇", "蔡約翰", "丁冠豪", "文家良",
+    "呂健威", "廖康銘", "伍鵬志", "姚本輝", "巫偉傑", "蘇偉賢", "徐雨石"
+]
+
+# 🌟 圖片資料夾（放晒22+23張人像相，檔名= "中文名.png"）
+PEOPLE_PHOTO_DIR = "people_photos"
+
+def get_person_photo(name):
+    """
+    根據名讀取返個人相；搵唔到就 return None
+    """
+    for ext in ["png", "jpg", "jpeg"]:
+        path = os.path.join(PEOPLE_PHOTO_DIR, f"{name}.{ext}")
+        if os.path.exists(path):
+            return Image.open(path).convert("RGBA")
+    return None
+
+
+def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
+                         trainer_name, trainer_img):
+    """
+    race_info: 例如 "第9場 11.繼往開來"
+    jockey_img / trainer_img: PIL Image 物件 (可以係 None)
+    """
+    image = Image.open(template_path).convert("RGB")
+    draw = ImageDraw.Draw(image)
+
+    font_filename = "LXGWWenKaiTC-Bold.ttf"
+
+    # 🌟 全部座標同字體大細集中喺呢度，方便你自己校準
+    CONFIG = {
+        # 第一個框：馬匹推介
+        "race_info": {
+            "font_size": 42,
+            "center_x": 500,   # 框嘅水平中心點
+            "center_y": 390,   # 框嘅垂直中心點
+            "color": "black",
+        },
+        # 第二個框：騎師王
+        "jockey_label": {
+            "text": "騎師王",
+            "font_size": 34,
+            "x": 145,
+            "center_y": 655,
+            "color": "black",
+        },
+        "jockey_name": {
+            "font_size": 40,
+            "x": 720,       # 名字文字方塊嘅左邊起點 (相右邊)
+            "center_y": 655,
+            "color": "black",
+        },
+        "jockey_photo": {
+            "center_x": 505,   # 相嘅水平中心點
+            "center_y": 655,
+            "width": 175,
+            "height": 175,
+        },
+        # 第三個框：練馬師王
+        "trainer_label": {
+            "text": "練馬師王",
+            "font_size": 34,
+            "x": 110,
+            "center_y": 905,
+            "color": "black",
+        },
+        "trainer_name": {
+            "font_size": 40,
+            "x": 660,
+            "center_y": 905,
+            "color": "black",
+        },
+        "trainer_photo": {
+            "center_x": 505,
+            "center_y": 905,
+            "width": 175,
+            "height": 175,
+        },
+    }
+
+    def load_font(size):
+        try:
+            return ImageFont.truetype(font_filename, size)
+        except:
+            return ImageFont.load_default()
+
+    def draw_centered_text(text, center_x, center_y, font, color):
+        w = font.getlength(text)
+        bbox = font.getbbox(text)
+        h = bbox[3] - bbox[1]
+        x = center_x - w / 2
+        y = center_y - h / 2 - bbox[1]
+        draw.text((x, y), text, fill=color, font=font)
+
+    def draw_left_text(text, x, center_y, font, color):
+        bbox = font.getbbox(text)
+        h = bbox[3] - bbox[1]
+        y = center_y - h / 2 - bbox[1]
+        draw.text((x, y), text, fill=color, font=font)
+
+    def paste_photo(photo_img, center_x, center_y, width, height):
+        if photo_img is None:
+            return
+        resized = photo_img.resize((width, height))
+        # 圓形頭像裁切（如果張相唔係圓形，可以拎走呢段直接貼正方形）
+        mask = Image.new("L", (width, height), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.ellipse((0, 0, width, height), fill=255)
+        paste_x = int(center_x - width / 2)
+        paste_y = int(center_y - height / 2)
+        image.paste(resized, (paste_x, paste_y), mask)
+
+    # ---- 1. 馬匹推介 ----
+    cfg = CONFIG["race_info"]
+    font_race = load_font(cfg["font_size"])
+    draw_centered_text(race_info, cfg["center_x"], cfg["center_y"], font_race, cfg["color"])
+
+    # ---- 2. 騎師王 ----
+    cfg_label = CONFIG["jockey_label"]
+    font_jockey_label = load_font(cfg_label["font_size"])
+    draw_left_text(cfg_label["text"], cfg_label["x"], cfg_label["center_y"], font_jockey_label, cfg_label["color"])
+
+    cfg_photo = CONFIG["jockey_photo"]
+    paste_photo(jockey_img, cfg_photo["center_x"], cfg_photo["center_y"], cfg_photo["width"], cfg_photo["height"])
+
+    cfg_name = CONFIG["jockey_name"]
+    font_jockey_name = load_font(cfg_name["font_size"])
+    draw_left_text(jockey_name, cfg_name["x"], cfg_name["center_y"], font_jockey_name, cfg_name["color"])
+
+    # ---- 3. 練馬師王 ----
+    cfg_label2 = CONFIG["trainer_label"]
+    font_trainer_label = load_font(cfg_label2["font_size"])
+    draw_left_text(cfg_label2["text"], cfg_label2["x"], cfg_label2["center_y"], font_trainer_label, cfg_label2["color"])
+
+    cfg_photo2 = CONFIG["trainer_photo"]
+    paste_photo(trainer_img, cfg_photo2["center_x"], cfg_photo2["center_y"], cfg_photo2["width"], cfg_photo2["height"])
+
+    cfg_name2 = CONFIG["trainer_name"]
+    font_trainer_name = load_font(cfg_name2["font_size"])
+    draw_left_text(trainer_name, cfg_name2["x"], cfg_name2["center_y"], font_trainer_name, cfg_name2["color"])
+
+    return image
+
+
+def race_day_intro_ui():
+    st.subheader("📢 會員賽日推介")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        race_num = st.text_input("場次 (例如 9):", value="9")
+    with col2:
+        horse_no = st.text_input("馬號 (例如 11):", value="11")
+
+    horse_name = st.text_input("馬名 (例如 繼往開來，最多4隻字):", value="", max_chars=4)
+
+    st.divider()
+
+    # ---- 騎師 ----
+    jockey_source = st.radio("騎師來源：", ["在港現役騎師", "其他 (外訪騎師)"], horizontal=True, key="jockey_source")
+    if jockey_source == "在港現役騎師":
+        jockey_name = st.selectbox("揀騎師：", JOCKEY_LIST, key="jockey_select")
+        jockey_img = get_person_photo(jockey_name)
+        if jockey_img is None:
+            st.warning(f"⚠️ 搵唔到 {jockey_name} 嘅相，請檢查 {PEOPLE_PHOTO_DIR} 資料夾。")
+    else:
+        jockey_name = st.text_input("輸入外訪騎師名：", key="jockey_other_name")
+        jockey_upload = st.file_uploader("上傳呢位騎師嘅相：", type=["png", "jpg", "jpeg"], key="jockey_other_photo")
+        jockey_img = Image.open(jockey_upload).convert("RGBA") if jockey_upload else None
+
+    st.divider()
+
+    # ---- 練馬師 ----
+    trainer_source = st.radio("練馬師來源：", ["在港現役練馬師", "其他 (外訪練馬師)"], horizontal=True, key="trainer_source")
+    if trainer_source == "在港現役練馬師":
+        trainer_name = st.selectbox("揀練馬師：", TRAINER_LIST, key="trainer_select")
+        trainer_img = get_person_photo(trainer_name)
+        if trainer_img is None:
+            st.warning(f"⚠️ 搵唔到 {trainer_name} 嘅相，請檢查 {PEOPLE_PHOTO_DIR} 資料夾。")
+    else:
+        trainer_name = st.text_input("輸入外訪練馬師名：", key="trainer_other_name")
+        trainer_upload = st.file_uploader("上傳呢位練馬師嘅相：", type=["png", "jpg", "jpeg"], key="trainer_other_photo")
+        trainer_img = Image.open(trainer_upload).convert("RGBA") if trainer_upload else None
+
+    st.divider()
+
+    if st.button("🎨 生成賽日推介圖片", type="primary", use_container_width=True):
+        template_file = "RaceDayIntro_Template.jpg"
+        if not os.path.exists(template_file):
+            st.error("❌ 搵唔到底圖 `RaceDayIntro_Template.jpg`，請確保已經上傳到 GitHub！")
+            return
+
+        if not horse_name:
+            st.error("❌ 請輸入馬名！")
+            return
+        if not jockey_name:
+            st.error("❌ 請輸入/選擇騎師！")
+            return
+        if not trainer_name:
+            st.error("❌ 請輸入/選擇練馬師！")
+            return
+
+        race_info = f"第{race_num}場 {horse_no}.{horse_name}"
+
+        result_img = draw_race_day_intro(
+            template_file, race_info,
+            jockey_name, jockey_img,
+            trainer_name, trainer_img
+        )
+
+        buf = io.BytesIO()
+        result_img.save(buf, format="PNG")
+        byte_im = buf.getvalue()
+
+        st.image(byte_im, caption="賽日推介預覽", use_container_width=True)
+        st.download_button(
+            "💾 下載圖片",
+            data=byte_im,
+            file_name=f"RaceDayIntro_R{race_num}.png",
+            mime="
+
+elif system_mode == "📢 賽日推介":
+    race_day_intro_ui()
