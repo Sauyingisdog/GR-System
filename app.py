@@ -1051,7 +1051,7 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
             "text": "騎師王",
             "font_size": 34,
             "x": 145,
-            "center_y": 655,
+            "center_y": 650,
             "color": "black",
         },
         "jockey_name": {
