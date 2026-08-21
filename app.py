@@ -141,12 +141,14 @@ def fetch_and_push_uk(date_str, client):
         spreadsheet = client.open_by_key(SHEET_ID)
         processed_races = []
         seen_race_nums = set()
+        duplicate_skip_count = 0
 
         for table in tables:
             race_num, info_text, country = extract_race_name_and_info(table)
             
             if race_num in seen_race_nums:
-                continue  # 🌟 已經處理過呢場，跳過避免重複
+                duplicate_skip_count += 1  # 🌟 暫時debug用
+                continue
             
             is_target_country = (country == "英國")
             if not is_target_country: continue 
@@ -227,7 +229,7 @@ def fetch_and_push_uk(date_str, client):
             
             processed_races.append(race_num)
             
-        return f"成功同步 {len(processed_races)} 場賽事至 Google Sheets！"
+        return f"成功同步 {len(processed_races)} 場賽事至 Google Sheets！（過程中跳過咗 {duplicate_skip_count} 個重複table）"
     except Exception as e:
         return f"發生錯誤: {e}"
 
