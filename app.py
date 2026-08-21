@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import re
 import os
 import io
+import time
 import textwrap
 from PIL import Image, ImageDraw, ImageFont
 import gspread
@@ -66,7 +67,26 @@ def clean_jockey_name(jockey_str):
     # 移除括號註記，例如 (a), (-3), (-5) 等見習/減磅標記
     cleaned = re.sub(r'\([^)]*\)', '', str(jockey_str))
     return cleaned.strip()
-    
+
+import time
+
+def safe_gsheet_call(func, *args, max_retries=5, **kwargs):
+    """
+    安全執行 Google Sheets API call，撞到 429 (quota超額) 就等一陣再試
+    """
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "Quota exceeded" in error_str:
+                wait_time = (attempt + 1) * 5  # 第1次等5秒，第2次等10秒，如此類推
+                time.sleep(wait_time)
+                if attempt == max_retries - 1:
+                    raise  # 試哂都唔得，就真係拋出錯誤
+            else:
+                raise  # 唔係429嘅錯誤，直接拋出，唔使retry
+
 def extract_race_name_and_info(table):
     s_node = table.find_previous('div', attrs={'data-flag': 'OverseasRaces'})
     s_prefix = s_node.get('idx') if s_node and s_node.get('idx') else None
