@@ -445,7 +445,7 @@ def fetch_and_push_pace_raw(date_str, client):
             header_row = ["馬號", "馬名", "檔位"]
             data_rows = [[h['no'], h['name'], h['draw']] for h in horses]
             full_data = [header_row] + data_rows
-            worksheet.update('A1', full_data, value_input_option='USER_ENTERED')
+            safe_gsheet_call(worksheet.update, 'A1', full_data, value_input_option='USER_ENTERED')
 
             processed_races.append(race_name)
 
@@ -685,7 +685,7 @@ def push_pace_grid_to_gsheet(client, race_name, pace_desc, track_type, grid_df):
     header_row = list(grid_df.columns)
 
     full_data = [meta_row, header_row] + grid_rows
-    worksheet.update('A1', full_data, value_input_option='USER_ENTERED')
+    safe_gsheet_call(worksheet.update, 'A1', full_data, value_input_option='USER_ENTERED')
 
 
 def fetch_pace_grid_from_gsheet(client, race_name):
@@ -789,8 +789,8 @@ def fetch_and_push_aus(date_str, client):
                 sheet_data[i+1][19] = r_data[0] 
                 sheet_data[i+1][20] = r_data[1] 
 
-            worksheet.update('A1', sheet_data, value_input_option='USER_ENTERED')
-            worksheet.freeze(rows=1)
+            safe_gsheet_call(worksheet.update, 'A1', sheet_data, value_input_option='USER_ENTERED')
+            safe_gsheet_call(worksheet.freeze, rows=1)
             
             try:
                 body = {
@@ -801,9 +801,9 @@ def fetch_and_push_aus(date_str, client):
                         {"updateDimensionProperties": {"range": {"sheetId": worksheet.id, "dimension": "COLUMNS", "startIndex": 19, "endIndex": 21}, "properties": {"pixelSize": 150}, "fields": "pixelSize"}}
                     ]
                 }
-                spreadsheet.batch_update(body)
+                safe_gsheet_call(spreadsheet.batch_update, body)
             except:
-                pass 
+                pass
 
             processed_races.append(race_num)
             
