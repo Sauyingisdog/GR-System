@@ -191,39 +191,28 @@ def fetch_and_push_uk(date_str, client):
 
             is_handicap = mismatch_count <= (len(horses) / 2)
             
-            sheet_data = [["" for _ in range(13)] for _ in range(len(horses) + 10)]
-            headers_list = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
-            for i, h in enumerate(headers_list):
-                sheet_data[0][i] = h + " (入分區)"
-                sheet_data[0][i+7] = h + " (自動排序展示區)"
+            # 🌟 簡化：淨係寫原始資料 (馬號、馬名、負磅、國際評分、是否讓磅、標準分基準)
+            # 評分輸入、計算、排序全部搬去Streamlit做，Google Sheet唔再做運算
+            headers_list = ['馬號', '馬名', '國際評分', '負磅', '是否讓磅', '標準分', '基準負磅', '最高分', '最低負磅']
+            sheet_data = [headers_list]
+            
+            standard_score = 115 if max_rating > 115 else 100
+            
+            for h in horses:
+                sheet_data.append([
+                    h['no'], 
+                    h['name'], 
+                    h['rating'], 
+                    h['actual_weight'],
+                    "TRUE" if is_handicap else "FALSE",
+                    standard_score,
+                    base_weight,
+                    max_rating,
+                    min_weight
+                ])
 
-            for idx, h in enumerate(horses):
-                row = idx + 1
-                row_idx = row + 1 
-                sheet_data[row][0] = f"{h['no']}. {h['name']}"
-                if is_handicap:
-                    c_col = h['rating']
-                    e_col = (base_weight - (max_rating - h['rating'])) - h['actual_weight']
-                else:
-                    c_col = 115 if max_rating > 115 else 100
-                    e_col = min_weight - h['actual_weight']
-                sheet_data[row][2] = c_col
-                sheet_data[row][3] = f"=B{row_idx}-C{row_idx}"
-                sheet_data[row][4] = e_col
-                sheet_data[row][5] = f"=D{row_idx}+E{row_idx}"
-
-            last_horse_row = len(horses) + 1
-            sheet_data[1][7] = f"=SORT(A2:F{last_horse_row}, 6, FALSE)"
-
-            comment_start_row = last_horse_row + 1
-            sheet_data[comment_start_row][7] = "--- 評語區 ---"
-            sheet_data[comment_start_row+1][7] = "No Bet 指數 (請填入右方格):"
-            sheet_data[comment_start_row+2][7] = "徒弟的話 (請填入右方格):"
-
-            worksheet.update('A1', sheet_data, value_input_option='USER_ENTERED')
-            worksheet.freeze(rows=1)
-            worksheet.columns_auto_resize(1, 1) 
-            worksheet.columns_auto_resize(8, 8) 
+            safe_gsheet_call(worksheet.update, 'A1', sheet_data, value_input_option='USER_ENTERED')
+            safe_gsheet_call(worksheet.freeze, rows=1)
             
             processed_races.append(race_num)
             
