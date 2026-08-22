@@ -212,16 +212,8 @@ def fetch_and_push_uk(date_str, client):
             top_rating_horses = [h for h in horses if h['rating'] == max_rating]
             base_weight = top_rating_horses[0]['actual_weight'] if top_rating_horses else 0
 
-            # 🌟 修正：用「評分差距 vs 負磅差距」是否一致，去判斷讓磅賽/平磅賽
-            # 如果超過一半馬匹嘅評分差距同負磅差距唔一致，就當平磅賽處理
-            mismatch_count = 0
-            for h in horses:
-                rating_diff = max_rating - h['rating']
-                weight_diff = base_weight - h['actual_weight']
-                if rating_diff != weight_diff:
-                    mismatch_count += 1
-
-            is_handicap = mismatch_count <= (len(horses) / 2)
+            # 🌟 改為人手判斷：預設全部當平磅賽，分析師入分嗰陣可以自己揀返是否讓磅
+is_handicap = False
             
             # 🌟 簡化：淨係寫原始資料 (馬號、馬名、負磅、國際評分、是否讓磅、標準分基準)
             # 評分輸入、計算、排序全部搬去Streamlit做，Google Sheet唔再做運算
@@ -1448,7 +1440,7 @@ def uk_scoring_ui(gs_client):
 
     race_num = st.text_input("2. 場次 (例如 S1-1):", value="S1-1", key="scoring_race_num")
 
-    if st.button("📥 讀取呢場資料（首次填會自動起步，續做會讀返之前進度）", use_container_width=True) and gs_client:
+if st.button("📥 讀取呢場資料（首次填會自動起步，續做會讀返之前進度）", use_container_width=True) and gs_client:
         with st.spinner("讀取中..."):
             df, no_bet_val, comment_val, msg = fetch_uk_raw_data(gs_client, race_num)
         if df is not None:
@@ -1460,6 +1452,14 @@ def uk_scoring_ui(gs_client):
             st.error(f"❌ {msg}")
 
     if "scoring_df" in st.session_state:
+        current_handicap_val = st.session_state.scoring_df['是否讓磅'].iloc[0] if len(st.session_state.scoring_df) > 0 else "FALSE"
+        is_handicap_checkbox = st.checkbox(
+            "☑️ 呢場係讓磅賽（Handicap）",
+            value=(str(current_handicap_val).upper() == "TRUE"),
+            key="scoring_is_handicap"
+        )
+        st.session_state.scoring_df['是否讓磅'] = "TRUE" if is_handicap_checkbox else "FALSE"
+
         st.write("**輸入/修改「預計評分」**（其他欄位由系統自動計算，唔使手動填）")
 
         edit_df = st.session_state.scoring_df[['馬號', '馬名', '國際評分', '負磅', '預計評分']].copy()
