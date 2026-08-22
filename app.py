@@ -1333,6 +1333,68 @@ def race_day_intro_ui():
             mime="image/png"
         )
 
+def uk_scoring_ui(gs_client):
+    st.subheader("✍️ 英國賽事入分（分析師用）")
+
+    race_num = st.text_input("場次 (例如 S1-1):", value="S1-1", key="scoring_race_num")
+
+    if st.button("📥 讀取呢場資料（首次填會自動起步，續做會讀返之前進度）", use_container_width=True) and gs_client:
+        with st.spinner("讀取中..."):
+            df, no_bet_val, comment_val, msg = fetch_uk_raw_data(gs_client, race_num)
+        if df is not None:
+            st.session_state.scoring_df = df
+            st.session_state.scoring_no_bet = no_bet_val
+            st.session_state.scoring_comment = comment_val
+            st.success(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
+        else:
+            st.error(f"❌ {msg}")
+
+    if "scoring_df" in st.session_state:
+        st.write("**輸入/修改「預計評分」**（其他欄位由系統自動計算，唔使手動填）")
+
+        edit_df = st.session_state.scoring_df[['馬號', '馬名', '國際評分', '負磅', '預計評分']].copy()
+
+        edited = st.data_editor(
+            edit_df,
+            use_container_width=True,
+            disabled=['馬號', '馬名', '國際評分', '負磅'],
+            key="scoring_editor"
+        )
+
+        st.session_state.scoring_df['預計評分'] = edited['預計評分']
+
+        calculated_df = calculate_uk_scores(st.session_state.scoring_df)
+
+        st.write("**排序結果（按知舍優勢由高至低）**")
+        display_cols = ['馬號', '馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
+        st.dataframe(calculated_df[display_cols], use_container_width=True)
+
+        st.divider()
+
+        no_bet_input = st.text_input(
+            "No Bet 指數 (例如 10/10):",
+            value=st.session_state.get("scoring_no_bet", ""),
+            key="scoring_no_bet_input"
+        )
+        comment_input = st.text_area(
+            "徒弟的話:",
+            value=st.session_state.get("scoring_comment", ""),
+            key="scoring_comment_input",
+            height=150
+        )
+
+        if st.button("💾 儲存去雲端", type="primary", use_container_width=True) and gs_client:
+            with st.spinner("儲存中..."):
+                result = save_uk_scoring_progress(
+                    gs_client, race_num,
+                    st.session_state.scoring_df,
+                    no_bet_input, comment_input
+                )
+            if result == "成功":
+                st.success(f"已儲存 {race_num} 嘅入分進度！")
+            else:
+                st.error(f"❌ 儲存失敗: {result}")
+
 # ==========================================
 # 🎨 介面佈局
 # ==========================================
