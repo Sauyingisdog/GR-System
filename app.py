@@ -901,6 +901,102 @@ def fetch_and_push_aus(date_str, client):
     except Exception as e:
         return f"發生錯誤: {e}"
 
+# ==========================================
+# 🇦🇺 澳洲Form Guide 分析師入分設定
+# ==========================================
+
+AUS_FIELD_OPTIONS = {
+    '場地/形勢': {
+        "": "（無）",
+        "1": "賺場",
+        "2": "賺欄",
+        "3": "蝕場",
+        "4": "外疊",
+        "5": "塞車",
+        "6": "慢閘",
+    },
+    '純熱身': {"": "（無）", "1": "✅ 顯示"},
+    '已博': {"": "（無）", "1": "✅ 顯示"},
+    '1st/2nd up': {
+        "": "（無）",
+        "1": "特佳",
+        "2": "特廢",
+    },
+    '箭頭今場': {"": "（無）", "1": "✅ 顯示"},
+    '目標下場': {"": "（無）", "1": "✅ 顯示"},
+    '未博伏兵': {"": "（無）", "1": "✅ 顯示"},
+    '騎師轉變': {
+        "": "（無）",
+        "1": "加強",
+        "2": "轉弱",
+        "3": "被棄",
+        "4": "焗換",
+    },
+    '場地': {
+        "": "（無）",
+        "1": "特佳",
+        "2": "特廢",
+    },
+    '隔夜過冷': {"": "（無）", "1": "✅ 顯示"},
+    '變化地': {
+        "": "（無）",
+        "1": "特佳",
+        "2": "特廢",
+    },
+    '正面配變': {"": "（無）", "1": "✅ 顯示"},
+    '閹後初出': {"": "（無）", "1": "✅ 顯示"},
+    '移民初出': {"": "（無）", "1": "✅ 顯示"},
+}
+
+AUS_EDITABLE_FIELDS = list(AUS_FIELD_OPTIONS.keys())
+
+def fetch_aus_raw_data(client, race_num):
+    """
+    讀取 fetch_and_push_aus 寫入嘅資料 (場/號/馬匹/騎師 + 17個標記欄位)
+    如果分析師已經填過部分標記，一併讀返，支援續做
+    """
+    try:
+        spreadsheet = client.open_by_key(SHEET_ID)
+        worksheet = spreadsheet.worksheet(race_num)
+        data = worksheet.get_all_values()
+        
+        if not data or len(data) < 2:
+            return None, "找不到數據，請先撳「下載並寫入雲端」攞馬會資料。"
+        
+        headers = data[0]
+        rows = data[1:]
+        
+        df = pd.DataFrame(rows, columns=headers)
+        
+        # 淨係要有馬匹嘅rows (第一欄"馬匹"唔係空)
+        df = df[df['馬匹'].str.strip() != ""].reset_index(drop=True)
+        
+        if len(df) == 0:
+            return None, "呢場搵唔到馬匹資料，請確認已經撳咗「下載並寫入雲端」。"
+        
+        return df, "成功"
+    except Exception as e:
+        return None, str(e)
+
+
+def save_aus_scoring_progress(client, race_num, df):
+    """
+    分析師填完17個標記之後，儲存去雲端
+    """
+    try:
+        spreadsheet = client.open_by_key(SHEET_ID)
+        worksheet = spreadsheet.worksheet(race_num)
+        
+        headers_list = list(df.columns)
+        sheet_data = [headers_list] + df.astype(str).values.tolist()
+        
+        safe_gsheet_call(worksheet.update, 'A1', sheet_data, value_input_option='USER_ENTERED')
+        safe_gsheet_call(worksheet.freeze, rows=1)
+        
+        return "成功"
+    except Exception as e:
+        return str(e)
+
 def draw_aus_image(template_path, df_data):
     image = Image.open(template_path).convert("RGBA")
     draw = ImageDraw.Draw(image)
@@ -1409,13 +1505,108 @@ def uk_scoring_ui(gs_client):
             else:
                 st.error(f"❌ 儲存失敗: {result}")
 
+def aus_scoring_ui(gs_client):
+    st.subheader("✍️ 澳洲Form Guide入分（分析師用）")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        date_input_aus_scoring = st.text_input("1. 輸入賽事日期 (例如 20260820):", value="20260820", key="aus_scoring_date")
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("🔄 下載並寫入雲端", use_container_width=True, key="aus_scoring_fetch_btn") and gs_client:
+            with st.spinner("寫入中，請稍候..."):
+                msg = fetch_and_push_aus(date_input_aus_scoring, gs_client)
+                if "成功" in msg: st.success(msg)
+                else: st.error(msg)
+
+    st.divider()
+
+    race_num = st.text_input("2. 場次 (例如 S1-2):", value="S1-2", key="aus_scoring_race_num")
+
+    if st.button("📥 讀取呢場資料", use_container_width=True) and gs_client:
+        with st.spinner("讀取中..."):
+            df, msg = fetch_aus_raw_data(gs_client, race_num)
+        if df is not None:
+            st.session_state.aus_scoring_df = df
+            st.session_state.aus_scoring_page = 0
+            st.success(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
+        else:
+            st.error(f"❌ {msg}")
+
+    if "aus_scoring_df" in st.session_state:
+        df = st.session_state.aus_scoring_df
+        total_horses = len(df)
+        horses_per_page = 3
+        total_pages = (total_horses + horses_per_page - 1) // horses_per_page
+
+        if "aus_scoring_page" not in st.session_state:
+            st.session_state.aus_scoring_page = 0
+
+        current_page = st.session_state.aus_scoring_page
+
+        st.divider()
+        st.write(f"**第 {current_page + 1} / {total_pages} 組**（每組3隻馬）")
+
+        start_idx = current_page * horses_per_page
+        end_idx = min(start_idx + horses_per_page, total_horses)
+
+        for idx in range(start_idx, end_idx):
+            horse_no = df.at[idx, '號']
+            horse_name = df.at[idx, '馬匹']
+            jockey_name = df.at[idx, '騎師']
+
+            st.markdown(f"### 🐎 {horse_no}. {horse_name}（騎師：{jockey_name}）")
+
+            cols = st.columns(3)
+            for field_idx, field_name in enumerate(AUS_EDITABLE_FIELDS):
+                col = cols[field_idx % 3]
+                with col:
+                    options_dict = AUS_FIELD_OPTIONS[field_name]
+                    option_keys = list(options_dict.keys())
+                    option_labels = list(options_dict.values())
+
+                    current_val = str(df.at[idx, field_name]) if field_name in df.columns else ""
+                    if current_val not in option_keys:
+                        current_val = ""
+                    current_idx = option_keys.index(current_val)
+
+                    selected_label = st.selectbox(
+                        field_name,
+                        options=option_labels,
+                        index=current_idx,
+                        key=f"aus_field_{idx}_{field_name}"
+                    )
+                    selected_key = option_keys[option_labels.index(selected_label)]
+                    st.session_state.aus_scoring_df.at[idx, field_name] = selected_key
+
+            st.divider()
+
+        col_prev, col_next, col_save = st.columns(3)
+        with col_prev:
+            if st.button("⬅️ 上一組", use_container_width=True, disabled=(current_page == 0)):
+                st.session_state.aus_scoring_page -= 1
+                st.rerun()
+        with col_next:
+            if st.button("➡️ 下一組", use_container_width=True, disabled=(current_page >= total_pages - 1)):
+                st.session_state.aus_scoring_page += 1
+                st.rerun()
+        with col_save:
+            if st.button("💾 儲存去雲端", type="primary", use_container_width=True) and gs_client:
+                with st.spinner("儲存中..."):
+                    result = save_aus_scoring_progress(gs_client, race_num, st.session_state.aus_scoring_df)
+                if result == "成功":
+                    st.success(f"已儲存 {race_num} 嘅入分進度！")
+                else:
+                    st.error(f"❌ 儲存失敗: {result}")
+
 # ==========================================
 # 🎨 介面佈局
 # ==========================================
 st.title("🏇 Gold Racing 雲端自動化系統")
 system_mode = st.radio(
     "請選擇你要使用嘅系統：",
-    ("🇬🇧 XX英國（出圖）", "🇬🇧 XX英國（入分）", "🇦🇺 澳洲 Form Guide", "📊 步速圖", "📢 賽日推介"),
+    ("🇬🇧 XX英國（出圖）", "🇬🇧 XX英國（入分）", "🇦🇺 澳洲（出圖）", "🇦🇺 澳洲（入分）", "📊 步速圖", "📢 賽日推介"),
     horizontal=True
 )
 st.divider()
@@ -1468,8 +1659,8 @@ if system_mode == "🇬🇧 XX英國（出圖）":
 elif system_mode == "🇬🇧 XX英國（入分）":
     uk_scoring_ui(gs_client)
 
-elif system_mode == "🇦🇺 澳洲 Form Guide":
-    st.subheader("🇦🇺 澳洲系統")
+elif system_mode == "🇦🇺 澳洲（出圖）":
+    st.subheader("🇦🇺 澳洲系統（出圖）")
     col1, col2 = st.columns([3, 1])
     with col1:
         date_input_aus = st.text_input("1. 輸入海外賽事日期:", value="20260820", key="aus_date")
@@ -1505,6 +1696,9 @@ elif system_mode == "🇦🇺 澳洲 Form Guide":
                     st.error("Google Sheet 入面無資料！")
             except Exception as e:
                 st.error(f"讀取或生成圖片時發生錯誤: {e}")
+
+elif system_mode == "🇦🇺 澳洲（入分）":
+    aus_scoring_ui(gs_client)
 
 elif system_mode == "📊 步速圖":
     pace_map_ui(gs_client)
