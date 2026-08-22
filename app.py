@@ -287,6 +287,62 @@ def fetch_from_gsheets_uk(client, race_num):
     except Exception as e:
         return None, None, None, str(e)
 
+def fetch_uk_raw_data(client, race_num):
+    """
+    讀取 fetch_and_push_uk 寫入嘅原始資料 (馬號/馬名/國際評分/負磅/是否讓磅/標準分/基準負磅/最高分/最低負磅)
+    如果已經有分析師填過嘅進度 (預計評分/No Bet/徒弟的話)，一併讀返
+    """
+    try:
+        spreadsheet = client.open_by_key(SHEET_ID)
+        worksheet = spreadsheet.worksheet(race_num)
+        data = worksheet.get_all_values()
+        
+        if not data or len(data) < 2:
+            return None, "", "", "找不到數據，請先撳「下載並寫入雲端」攞馬會資料。"
+        
+        headers = data[0]
+        rows = data[1:]
+        
+        df = pd.DataFrame(rows, columns=headers)
+        
+        # 如果未有「預計評分」欄，即係分析師未開始填過，就加返一欄空嘅
+        if '預計評分' not in df.columns:
+            df['預計評分'] = df['國際評分']  # 預設用國際評分做起點，方便分析師修改
+        
+        no_bet_val = ""
+        comment_val = ""
+        if '__meta_no_bet__' in df.columns and len(df) > 0:
+            no_bet_val = df['__meta_no_bet__'].iloc[0]
+        if '__meta_comment__' in df.columns and len(df) > 0:
+            comment_val = df['__meta_comment__'].iloc[0]
+        
+        return df, no_bet_val, comment_val, "成功"
+    except Exception as e:
+        return None, "", "", str(e)
+
+def save_uk_scoring_progress(client, race_num, df, no_bet_val, comment_val):
+    """
+    分析師填完評分/No Bet/徒弟的話之後，儲存去雲端
+    格式：原始欄位 + 預計評分 + meta欄位(No Bet指數/徒弟的話)
+    """
+    try:
+        spreadsheet = client.open_by_key(SHEET_ID)
+        worksheet = spreadsheet.worksheet(race_num)
+        
+        df_to_save = df.copy()
+        df_to_save['__meta_no_bet__'] = no_bet_val
+        df_to_save['__meta_comment__'] = comment_val
+        
+        headers_list = list(df_to_save.columns)
+        sheet_data = [headers_list] + df_to_save.astype(str).values.tolist()
+        
+        safe_gsheet_call(worksheet.update, 'A1', sheet_data, value_input_option='USER_ENTERED')
+        safe_gsheet_call(worksheet.freeze, rows=1)
+        
+        return "成功"
+    except Exception as e:
+        return str(e)
+
 # 🌟 新增 tier 參數，控制出圖邏輯 (platinum / gold)
 def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text, tier="platinum"):
     image = Image.open(template_path).convert("RGB")
