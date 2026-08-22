@@ -1575,7 +1575,7 @@ def aus_scoring_ui(gs_client):
                         field_name,
                         options=option_labels,
                         index=current_idx,
-                        key=f"aus_field_{idx}_{field_name}"
+                        key=f"aus_field_{race_num}_{idx}_{field_name}"
                     )
                     selected_key = option_keys[option_labels.index(selected_label)]
                     st.session_state.aus_scoring_df.at[idx, field_name] = selected_key
