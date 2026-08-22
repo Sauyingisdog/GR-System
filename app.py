@@ -1440,7 +1440,7 @@ def uk_scoring_ui(gs_client):
 
     race_num = st.text_input("2. 場次 (例如 S1-1):", value="S1-1", key="scoring_race_num")
 
-if st.button("📥 讀取呢場資料（首次填會自動起步，續做會讀返之前進度）", use_container_width=True) and gs_client:
+    if st.button("📥 讀取呢場資料（首次填會自動起步，續做會讀返之前進度）", use_container_width=True) and gs_client:
         with st.spinner("讀取中..."):
             df, no_bet_val, comment_val, msg = fetch_uk_raw_data(gs_client, race_num)
         if df is not None:
