@@ -213,7 +213,7 @@ def fetch_and_push_uk(date_str, client):
             base_weight = top_rating_horses[0]['actual_weight'] if top_rating_horses else 0
 
             # 🌟 改為人手判斷：預設全部當平磅賽，分析師入分嗰陣可以自己揀返是否讓磅
-is_handicap = False
+            is_handicap = False
             
             # 🌟 簡化：淨係寫原始資料 (馬號、馬名、負磅、國際評分、是否讓磅、標準分基準)
             # 評分輸入、計算、排序全部搬去Streamlit做，Google Sheet唔再做運算
