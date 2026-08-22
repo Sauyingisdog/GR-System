@@ -256,34 +256,34 @@ def fetch_from_gsheets_uk(client, race_num):
     try:
         spreadsheet = client.open_by_key(SHEET_ID)
         worksheet = spreadsheet.worksheet(race_num)
-        data = worksheet.get_all_values(value_render_option='UNFORMATTED_VALUE')
+        data = worksheet.get_all_values()
         
-        if not data: return None, None, None, "找不到數據"
-            
-        split_idx = -1
-        for i, row in enumerate(data):
-            if len(row) > 7 and row[7] == "--- 評語區 ---":
-                split_idx = i
-                break
-                
-        if split_idx == -1:
-            return None, None, None, "找不到評語區，請確保雲端表格格式正確。"
-            
-        horse_data = []
-        for i in range(1, split_idx): 
-            if len(data[i]) > 7 and str(data[i][7]).strip() != "":
-                 horse_data.append(data[i][7:13])
-                 
-        headers_list = ['馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
-        df = pd.DataFrame(horse_data, columns=headers_list)
+        if not data or len(data) < 2:
+            return None, None, None, "找不到數據，請確保分析師已經完成入分並儲存。"
         
-        for col in ['預計評分', '標準分', '優勢', '調整評分', '知舍優勢']:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            
-        no_bet_val = str(data[split_idx+1][8]) if len(data[split_idx+1]) > 8 else ""
-        comment_val = str(data[split_idx+2][8]) if len(data[split_idx+2]) > 8 else ""
+        headers = data[0]
+        rows = data[1:]
         
-        return df, no_bet_val, comment_val, "成功"
+        df = pd.DataFrame(rows, columns=headers)
+        
+        required_cols = ['預計評分', '國際評分', '負磅', '是否讓磅', '標準分', '基準負磅', '最高分', '最低負磅']
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            return None, None, None, f"呢場仲未經分析師入分，缺少欄位: {missing_cols}"
+        
+        no_bet_val = ""
+        comment_val = ""
+        if '__meta_no_bet__' in df.columns and len(df) > 0:
+            no_bet_val = str(df['__meta_no_bet__'].iloc[0])
+        if '__meta_comment__' in df.columns and len(df) > 0:
+            comment_val = str(df['__meta_comment__'].iloc[0])
+        
+        calculated_df = calculate_uk_scores(df)
+        
+        display_df = calculated_df[['馬號', '馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']].copy()
+        display_df['馬名'] = display_df['馬號'].astype(str) + '. ' + display_df['馬名'].astype(str)
+        
+        return display_df, no_bet_val, comment_val, "成功"
     except Exception as e:
         return None, None, None, str(e)
 
