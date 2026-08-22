@@ -120,7 +120,39 @@ def extract_race_name_and_info(table):
             break
         
     return race_name, info_text, country
+
+def calculate_uk_scores(df):
+    """
+    畀個包含 '國際評分', '負磅', '是否讓磅', '標準分', '基準負磅', '預計評分' 嘅df，
+    計算 標準分/優勢/調整評分/知舍優勢，並按知舍優勢由高至低排序
+    """
+    df = df.copy()
     
+    df['預計評分'] = pd.to_numeric(df['預計評分'], errors='coerce').fillna(0)
+    df['國際評分'] = pd.to_numeric(df['國際評分'], errors='coerce').fillna(0)
+    df['負磅'] = pd.to_numeric(df['負磅'], errors='coerce').fillna(0)
+    df['標準分'] = pd.to_numeric(df['標準分'], errors='coerce').fillna(0)
+    df['基準負磅'] = pd.to_numeric(df['基準負磅'], errors='coerce').fillna(0)
+    df['最高分'] = pd.to_numeric(df['最高分'], errors='coerce').fillna(0)
+    df['最低負磅'] = pd.to_numeric(df['最低負磅'], errors='coerce').fillna(0)
+    
+    is_handicap = df['是否讓磅'].iloc[0] == "TRUE" if len(df) > 0 else False
+    
+    def calc_row(row):
+        if is_handicap:
+            e_col = (row['基準負磅'] - (row['最高分'] - row['預計評分'])) - row['負磅']
+        else:
+            e_col = row['最低負磅'] - row['負磅']
+        return e_col
+    
+    df['調整評分'] = df.apply(calc_row, axis=1)
+    df['優勢'] = df['預計評分'] - df['標準分']
+    df['知舍優勢'] = df['優勢'] + df['調整評分']
+    
+    df_sorted = df.sort_values('知舍優勢', ascending=False).reset_index(drop=True)
+    
+    return df_sorted
+
 # ==========================================
 # 🇬🇧 英國/本地系統核心函數
 # ==========================================
