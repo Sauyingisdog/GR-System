@@ -1336,7 +1336,21 @@ def race_day_intro_ui():
 def uk_scoring_ui(gs_client):
     st.subheader("✍️ 英國賽事入分（分析師用）")
 
-    race_num = st.text_input("場次 (例如 S1-1):", value="S1-1", key="scoring_race_num")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        date_input_scoring = st.text_input("1. 輸入賽事日期 (例如 20260819):", value="20260819", key="scoring_date")
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("🔄 下載並寫入雲端", use_container_width=True, key="scoring_fetch_btn") and gs_client:
+            with st.spinner("寫入中，請稍候..."):
+                msg = fetch_and_push_uk(date_input_scoring, gs_client)
+                if "成功" in msg: st.success(msg)
+                else: st.error(msg)
+
+    st.divider()
+
+    race_num = st.text_input("2. 場次 (例如 S1-1):", value="S1-1", key="scoring_race_num")
 
     if st.button("📥 讀取呢場資料（首次填會自動起步，續做會讀返之前進度）", use_container_width=True) and gs_client:
         with st.spinner("讀取中..."):
@@ -1401,12 +1415,12 @@ def uk_scoring_ui(gs_client):
 st.title("🏇 Gold Racing 雲端自動化系統")
 system_mode = st.radio(
     "請選擇你要使用嘅系統：",
-    ("🇬🇧 英國/本地 XX創馬法", "🇦🇺 澳洲 Form Guide", "📊 步速圖", "📢 賽日推介"),
+    ("🇬🇧 XX英國（出圖）", "🇬🇧 XX英國（入分）", "🇦🇺 澳洲 Form Guide", "📊 步速圖", "📢 賽日推介"),
     horizontal=True
 )
 st.divider()
 
-if system_mode == "🇬🇧 英國/本地 XX創馬法":
+if system_mode == "🇬🇧 XX英國（出圖）":
     st.subheader("🇬🇧 英國/本地系統")
     col1, col2 = st.columns([3, 1])
     with col1:
