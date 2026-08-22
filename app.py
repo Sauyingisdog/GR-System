@@ -1465,6 +1465,9 @@ if system_mode == "🇬🇧 XX英國（出圖）":
             else:
                 st.error(f"❌ 讀取失敗: {msg}。")
 
+elif system_mode == "🇬🇧 XX英國（入分）":
+    uk_scoring_ui(gs_client)
+
 elif system_mode == "🇦🇺 澳洲 Form Guide":
     st.subheader("🇦🇺 澳洲系統")
     col1, col2 = st.columns([3, 1])
