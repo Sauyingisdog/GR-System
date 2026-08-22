@@ -1364,6 +1364,9 @@ def uk_scoring_ui(gs_client):
             st.error(f"❌ {msg}")
 
     if "scoring_df" in st.session_state:
+        st.write("🔍 Debug - 欄位名:", list(st.session_state.scoring_df.columns))
+        st.write("🔍 Debug - 資料內容:", st.session_state.scoring_df)
+        
         st.write("**輸入/修改「預計評分」**（其他欄位由系統自動計算，唔使手動填）")
 
         edit_df = st.session_state.scoring_df[['馬號', '馬名', '國際評分', '負磅', '預計評分']].copy()
