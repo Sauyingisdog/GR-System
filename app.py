@@ -1267,6 +1267,13 @@ def pace_map_ui(gs_client):
                     else:
                         horse_list["馬名"] = ""
 
+                    horse_list = attach_pace_marks(
+                        horse_list,
+                        st.session_state.get("pace_earn_horses", ""),
+                        st.session_state.get("pace_lost_horses", ""),
+                        st.session_state.get("pace_change_horses", "")
+                    )
+
                     conflicts = detect_position_conflicts(horse_list)
                     if conflicts:
                         for c in conflicts:
