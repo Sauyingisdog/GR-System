@@ -728,7 +728,7 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
     if track_type == "直路":
     title_y = 610
     subtitle_y = 660
-else:
+    else:
     title_y = 35
     subtitle_y = 90
 
