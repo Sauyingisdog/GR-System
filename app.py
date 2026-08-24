@@ -1302,6 +1302,8 @@ def pace_map_ui(gs_client):
                 else:
                     horse_list2["馬名"] = ""
 
+                horse_list2 = attach_pace_marks(horse_list2, earn_horses2, lost_horses2, change_horses2)
+
                 result_img = draw_pace_map(horse_list2, race_name2, pace_desc2, track_type2)
                 buf = io.BytesIO()
                 result_img.save(buf, format="PNG")
