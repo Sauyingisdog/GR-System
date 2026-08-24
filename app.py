@@ -656,7 +656,7 @@ def grid_to_horse_list(grid_df, num_rows, track_type):
 
 def init_grid_by_draw(horses_df, num_cols=8, num_rows=4):
     horses_sorted = horses_df.sort_values('檔位').reset_index(drop=True)
-    grid_data = [["" for _ in range(num    _cols)] for _ in range(num_rows)]
+    grid_data = [["" for _ in range(num_cols)] for _ in range(num_rows)]
 
     max_col_used = 4
 
