@@ -794,7 +794,9 @@ def push_pace_grid_to_gsheet(client, race_name, pace_desc, track_type, grid_df):
         worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="20", cols="10")
 
     meta_row = [race_name, pace_desc, track_type]
-    grid_rows = grid_df.values.tolist()
+    cleaned_grid_df = grid_df.fillna("").astype(str)
+    cleaned_grid_df = cleaned_grid_df.replace("None", "")
+    grid_rows = cleaned_grid_df.values.tolist()
     header_row = list(grid_df.columns)
 
     full_data = [meta_row, header_row] + grid_rows
