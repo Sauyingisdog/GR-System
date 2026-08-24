@@ -725,12 +725,19 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
     horse_earn = Image.open("earn.png").convert("RGBA").resize((horse_w, horse_h))
     horse_lost = Image.open("lost.png").convert("RGBA").resize((horse_w, horse_h))
 
-    box_center_x = 635
-    title_w = font_title.getlength(race_name)
-    draw.text((box_center_x - title_w/2, 35), race_name, fill="black", font=font_title)
-    subtitle_text = f"預計步速: {pace_desc}"
-    subtitle_w = font_subtitle.getlength(subtitle_text)
-    draw.text((box_center_x - subtitle_w/2, 90), subtitle_text, fill="black", font=font_subtitle)
+    if track_type == "直路":
+    title_y = 610
+    subtitle_y = 660
+else:
+    title_y = 35
+    subtitle_y = 90
+
+box_center_x = 635
+title_w = font_title.getlength(race_name)
+draw.text((box_center_x - title_w/2, title_y), race_name, fill="black", font=font_title)
+subtitle_text = f"預計步速: {pace_desc}"
+subtitle_w = font_subtitle.getlength(subtitle_text)
+draw.text((box_center_x - subtitle_w/2, subtitle_y), subtitle_text, fill="black", font=font_subtitle)
 
     baseline_y = baseline_y_straight if track_type == "直路" else baseline_y_curve
 
