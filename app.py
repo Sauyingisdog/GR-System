@@ -1201,6 +1201,19 @@ def pace_map_ui(gs_client):
             )
             st.session_state.pace_grid_df = edited_grid.reset_index(drop=True)
 
+            st.write("**特殊標記**（輸入馬號，多隻馬用逗號分隔，例如 `1,9`；冇就留空）")
+            col_x, col_y, col_z = st.columns(3)
+            with col_x:
+                earn_horses_input = st.text_input("本場賺步速馬：", value=st.session_state.get("pace_earn_horses", ""), key="pace_earn_input")
+            with col_y:
+                lost_horses_input = st.text_input("本場蝕步速馬：", value=st.session_state.get("pace_lost_horses", ""), key="pace_lost_input")
+            with col_z:
+                change_horses_input = st.text_input("本場變奏馬：", value=st.session_state.get("pace_change_horses", ""), key="pace_change_input")
+
+            st.session_state.pace_earn_horses = earn_horses_input
+            st.session_state.pace_lost_horses = lost_horses_input
+            st.session_state.pace_change_horses = change_horses_input
+            
             col_a, col_b = st.columns(2)
             with col_a:
                 if st.button("👀 即時預覽", use_container_width=True):
