@@ -702,7 +702,7 @@ def detect_position_conflicts(horse_list_df):
 
 
 def draw_pace_map(df, race_name, pace_desc, track_type,
-                   col_unit=150, row_unit=145, origin_x=60,
+                   col_unit=150, row_unit=125, origin_x=60,
                    baseline_y_curve=665, baseline_y_straight=75,
                    horse_w=140, horse_h=93, row_gap=5):
     template_file = "backgroundstraight.jpg" if track_type == "直路" else "background.jpg"
