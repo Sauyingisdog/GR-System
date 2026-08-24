@@ -601,31 +601,41 @@ def grid_to_horse_list(grid_df, num_rows, track_type):
     n_display_rows = len(grid_df)
     total_cols = len(grid_df.columns)
 
+    # 🌟 第一步：先掃描全部row，攞晒有馬嘅column，用嚟計一個全局共用嘅置中位移
+    all_filled_col_indices = []
+    row_filled_cache = {}
+
     for display_row_idx in range(n_display_rows):
         row_cells = grid_df.iloc[display_row_idx]
+        filled = []
+        for col_idx, col_name in enumerate(grid_df.columns):
+            horse_no, row_offset, col_offset = parse_grid_cell(row_cells[col_name])
+            if horse_no is not None:
+                filled.append((col_idx, horse_no, row_offset, col_offset))
+                all_filled_col_indices.append(col_idx)
+        row_filled_cache[display_row_idx] = filled
+
+    if not all_filled_col_indices:
+        return pd.DataFrame(horse_list)
+
+    global_min_col_idx = min(all_filled_col_indices)
+    global_max_col_idx = max(all_filled_col_indices)
+    global_span = global_max_col_idx - global_min_col_idx + 1
+    center_shift = (total_cols - global_span) / 2.0
+
+    # 🌟 第二步：全部row用返同一個 center_shift，去計算實際畫圖位置
+    for display_row_idx in range(n_display_rows):
+        filled = row_filled_cache[display_row_idx]
+        if not filled:
+            continue
 
         if track_type == "直路":
             actual_row_base = display_row_idx + 1
         else:
             actual_row_base = n_display_rows - display_row_idx
 
-        filled = []
-        for col_idx, col_name in enumerate(grid_df.columns):
-            horse_no, row_offset, col_offset = parse_grid_cell(row_cells[col_name])
-            if horse_no is not None:
-                filled.append((col_idx, horse_no, row_offset, col_offset))
-
-        if not filled:
-            continue
-
-        min_col_idx = min(f[0] for f in filled)
-        max_col_idx = max(f[0] for f in filled)
-        span = max_col_idx - min_col_idx + 1
-
-        center_shift = (total_cols - span) / 2.0
-
         for orig_col_idx, horse_no, row_offset, col_offset in filled:
-            relative_pos = orig_col_idx - min_col_idx
+            relative_pos = orig_col_idx - global_min_col_idx
             actual_col = relative_pos + 1 + center_shift + col_offset
             actual_row = actual_row_base + row_offset
 
@@ -636,7 +646,6 @@ def grid_to_horse_list(grid_df, num_rows, track_type):
             })
 
     return pd.DataFrame(horse_list)
-
 
 def init_grid_by_draw(horses_df, num_cols=8, num_rows=4):
     horses_sorted = horses_df.sort_values('檔位').reset_index(drop=True)
