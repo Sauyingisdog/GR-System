@@ -726,11 +726,11 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
     horse_lost = Image.open("lost.png").convert("RGBA").resize((horse_w, horse_h))
 
     if track_type == "直路":
-    title_y = 610
-    subtitle_y = 660
+        title_y = 610
+        subtitle_y = 660
     else:
-    title_y = 35
-    subtitle_y = 90
+        title_y = 35
+        subtitle_y = 90
 
 box_center_x = 635
 title_w = font_title.getlength(race_name)
