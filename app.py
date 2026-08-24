@@ -737,7 +737,7 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
     scale_x = horse_w / 158.0
     scale_y = horse_h / 105.0
     num_box = (21 * scale_x, 25.4 * scale_y, 145.15 * scale_x, 27.63 * scale_y)
-    name_box = (5.92    name_box = ( * scale_x, 64.89 * scale_y, 145.15 * scale_x, 27.63 * scale_y)
+    name_box = (5.92 * scale_x, 64.89 * scale_y, 145.15 * scale_x, 27.63 * scale_y)
 
     for _, horse in df.iterrows():
         row = float(horse["Row"])
