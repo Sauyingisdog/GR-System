@@ -656,7 +656,7 @@ def grid_to_horse_list(grid_df, num_rows, track_type):
 
 def init_grid_by_draw(horses_df, num_cols=8, num_rows=4):
     horses_sorted = horses_df.sort_values('檔位').reset_index(drop=True)
-    grid_data = [["" for _ in range(num_cols)] for _ in range(num_rows)]
+    grid_data = [["" for _ in range(num    _cols)] for _ in range(num_rows)]
 
     max_col_used = 4
 
@@ -683,6 +683,43 @@ def attach_horse_names(horse_list_df, name_map):
     horse_list_df['馬名'] = horse_list_df['馬號'].map(name_map).fillna("未知")
     return horse_list_df
 
+def parse_horse_number_list(text):
+    """
+    將逗號分隔嘅馬號文字（例如 "1, 9"）轉做一個set，方便快速查詢
+    """
+    if not text or not text.strip():
+        return set()
+    parts = text.split(',')
+    result = set()
+    for p in parts:
+        p = p.strip()
+        if p.isdigit():
+            result.add(int(p))
+    return result
+
+
+def attach_pace_marks(horse_list_df, earn_horses_text, lost_horses_text, change_horses_text):
+    """
+    根據賺步速/蝕步速/變奏嘅馬號文字，幫horse_list加返 步速標記 同 變奏 呢兩欄
+    """
+    horse_list_df = horse_list_df.copy()
+
+    earn_set = parse_horse_number_list(earn_horses_text)
+    lost_set = parse_horse_number_list(lost_horses_text)
+    change_set = parse_horse_number_list(change_horses_text)
+
+    def get_pace_mark(horse_no):
+        if horse_no in earn_set:
+            return "賺步速"
+        elif horse_no in lost_set:
+            return "蝕步速"
+        else:
+            return "正常"
+
+    horse_list_df['步速標記'] = horse_list_df['馬號'].apply(get_pace_mark)
+    horse_list_df['變奏'] = horse_list_df['馬號'].apply(lambda no: no in change_set)
+
+    return horse_list_df
 
 def detect_position_conflicts(horse_list_df):
     conflicts = []
