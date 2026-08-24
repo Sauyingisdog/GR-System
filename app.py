@@ -705,7 +705,7 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
     font_filename = "LXGWWenKaiTC-Bold.ttf"
     try:
         font_number = ImageFont.truetype(font_filename, 28)
-        font_name = ImageFont.truetype(font_filename, 20)
+        font_name = ImageFont.truetype(font_filename, 22)
         font_title = ImageFont.truetype(font_filename, 40)
         font_subtitle = ImageFont.truetype(font_filename, 26)
     except:
