@@ -761,6 +761,7 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
     horse_normal = Image.open("normal.png").convert("RGBA").resize((horse_w, horse_h))
     horse_earn = Image.open("earn.png").convert("RGBA").resize((horse_w, horse_h))
     horse_lost = Image.open("lost.png").convert("RGBA").resize((horse_w, horse_h))
+    change_icon = Image.open("change.png").convert("RGBA").resize((39, 39))
 
     if track_type == "直路":
         title_y = 600
@@ -805,6 +806,12 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
             horse_img = horse_normal
 
         image.paste(horse_img, (px, py), horse_img)
+
+        has_change = bool(horse["變奏"]) if "變奏" in horse else False
+        if has_change:
+            change_x = px - 10
+            change_y = py - 10
+            image.paste(change_icon, (change_x, change_y), change_icon)
 
         nb_x, nb_y, nb_w, nb_h = num_box
         num_text_w = font_number.getlength(no)
