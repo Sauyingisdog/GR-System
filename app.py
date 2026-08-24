@@ -814,20 +814,23 @@ def fetch_pace_grid_from_gsheet(client, race_name):
         data = worksheet.get_all_values()
 
         if len(data) < 3:
-            return None, None, None, None, "數據不足"
+            return None, None, None, None, "數據不足", "", "", ""
 
         meta = data[0]
         race_name_out = meta[0]
         pace_desc_out = meta[1]
         track_type_out = meta[2]
+        earn_horses_out = meta[3] if len(meta) > 3 else ""
+        lost_horses_out = meta[4] if len(meta) > 4 else ""
+        change_horses_out = meta[5] if len(meta) > 5 else ""
 
         header_row = data[1]
         grid_rows = data[2:]
         grid_df = pd.DataFrame(grid_rows, columns=header_row)
 
-        return race_name_out, pace_desc_out, track_type_out, grid_df, "成功"
+        return race_name_out, pace_desc_out, track_type_out, grid_df, "成功", earn_horses_out, lost_horses_out, change_horses_out
     except Exception as e:
-        return None, None, None, None, str(e)
+        return None, None, None, None, str(e), "", "", ""
 
 # ==========================================
 # 🇦🇺 澳洲 Form Guide 核心函數
@@ -1250,7 +1253,7 @@ def pace_map_ui(gs_client):
         race_to_load = st.text_input("輸入場次", value="R6", key="pace_load_race")
         if st.button("📥 讀取排位資料並出圖", type="primary", use_container_width=True) and gs_client:
             with st.spinner("讀取中..."):
-                race_name2, pace_desc2, track_type2, grid_df2, msg = fetch_pace_grid_from_gsheet(gs_client, race_to_load)
+                race_name2, pace_desc2, track_type2, grid_df2, msg, earn_horses2, lost_horses2, change_horses2 = fetch_pace_grid_from_gsheet(gs_client, race_to_load)
 
             if grid_df2 is not None:
                 horses_df2, name_msg = fetch_pace_raw_from_gsheet(gs_client, race_to_load)
