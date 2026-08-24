@@ -784,7 +784,7 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
     return image
 
 
-def push_pace_grid_to_gsheet(client, race_name, pace_desc, track_type, grid_df):
+def push_pace_grid_to_gsheet(client, race_name, pace_desc, track_type, grid_df, earn_horses="", lost_horses="", change_horses=""):
     spreadsheet = client.open_by_key(SHEET_ID)
     sheet_name = f"PaceGrid_{race_name}"
     try:
@@ -793,9 +793,12 @@ def push_pace_grid_to_gsheet(client, race_name, pace_desc, track_type, grid_df):
     except gspread.exceptions.WorksheetNotFound:
         worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="20", cols="10")
 
-    meta_row = [race_name, pace_desc, track_type]
+    meta_row = [race_name, pace_desc, track_type, earn_horses, lost_horses, change_horses]
+
+    # 🌟 清理 None / NaN，轉做空字串，避免send去Google Sheets API嗰陣JSON爆錯
     cleaned_grid_df = grid_df.fillna("").astype(str)
     cleaned_grid_df = cleaned_grid_df.replace("None", "")
+
     grid_rows = cleaned_grid_df.values.tolist()
     header_row = list(grid_df.columns)
 
@@ -1234,7 +1237,13 @@ def pace_map_ui(gs_client):
 
             with col_b:
                 if st.button("💾 儲存去雲端（俾出圖用）", use_container_width=True) and gs_client:
-                    push_pace_grid_to_gsheet(gs_client, race_name, pace_desc, track_type, st.session_state.pace_grid_df)
+                    push_pace_grid_to_gsheet(
+                        gs_client, race_name, pace_desc, track_type,
+                        st.session_state.pace_grid_df,
+                        earn_horses=st.session_state.get("pace_earn_horses", ""),
+                        lost_horses=st.session_state.get("pace_lost_horses", ""),
+                        change_horses=st.session_state.get("pace_change_horses", "")
+                    )
                     st.success(f"已儲存 {race_name} 嘅排位資料！")
 
     with tab2:
