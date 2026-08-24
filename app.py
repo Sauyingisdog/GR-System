@@ -585,7 +585,7 @@ def parse_grid_cell(cell_text):
     has_right = '>' in cell_text
 
     if has_up and has_right:
-        row_offset, col_offset = 0, 0
+        row_offset, col_offset = -0.5, 0.5
     elif has_up:
         row_offset, col_offset = -0.5, 0
     elif has_right:
@@ -637,7 +637,14 @@ def grid_to_horse_list(grid_df, num_rows, track_type):
         for orig_col_idx, horse_no, row_offset, col_offset in filled:
             relative_pos = orig_col_idx - global_min_col_idx
             actual_col = relative_pos + 1 + center_shift + col_offset
-            actual_row = actual_row_base + row_offset
+
+            # 🌟 「^」代表畫面上面，但彎道模式嘅座標系統同直路相反，要反轉正負號
+            if track_type == "彎道":
+                adjusted_row_offset = -row_offset
+            else:
+                adjusted_row_offset = row_offset
+
+            actual_row = actual_row_base + adjusted_row_offset
 
             horse_list.append({
                 '馬號': horse_no,
