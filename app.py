@@ -809,7 +809,7 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
 
         has_change = bool(horse["變奏"]) if "變奏" in horse else False
         if has_change:
-            change_x = px 0
+            change_x = px - 0
             change_y = py - 10
             image.paste(change_icon, (change_x, change_y), change_icon)
 
