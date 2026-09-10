@@ -33,16 +33,7 @@ def check_password():
 
 if not check_password():
     st.stop()
-
-if st.sidebar.checkbox("🔧 顯示套件版本"):
-    import importlib.metadata as md
-    for pkg in ["streamlit", "pandas", "requests", "beautifulsoup4",
-                "Pillow", "gspread", "google-auth"]:
-        try:
-            st.sidebar.text(f"{pkg}=={md.version(pkg)}")
-        except Exception:
-            st.sidebar.text(f"{pkg}: 讀唔到")
-            
+           
 # ==========================================
 # ⚙️ 基本設定與 Google 連線
 # ==========================================
