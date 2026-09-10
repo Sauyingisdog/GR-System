@@ -1,7 +1,16 @@
-streamlit
-pandas
-requests
-beautifulsoup4
-Pillow
+# Gold Racing Streamlit App
+# ============================================================
+# 版本全部釘實。呢啲數字係由 Streamlit Cloud 實際跑緊嗰個環境讀返嚟嘅，
+# 唔係估。冇釘實嘅話，每次 rebuild 都會裝當刻最新版，
+# 份code一個字冇改都可以無端端壞咗。
+#
+# 想升級：改嗰個數字 → push → 睇吓行唔行到 → 唔得就改返。
+# ============================================================
+
+streamlit==1.63.0
+pandas==3.0.5
+requests==2.34.2
+beautifulsoup4==4.15.0
+Pillow==12.3.0
 gspread==6.1.4
-google-auth
+google-auth==2.58.0
