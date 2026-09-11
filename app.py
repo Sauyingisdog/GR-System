@@ -831,7 +831,7 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
 
     # 馬名喺個白框入面睇落偏低，向上褪。
     # 負數 = 向上，正數 = 向落。想再微調就改呢一個數。
-    NAME_Y_OFFSET = -0.5
+    NAME_Y_OFFSET = -2
 
     for _, horse in df.iterrows():
         row = float(horse["Row"])
@@ -1734,9 +1734,11 @@ def uk_snapshot(df, no_bet, comment):
     try:
         ratings = list(df['預計評分'].astype(str))
         handicap = str(df['是否讓磅'].iloc[0]) if len(df) > 0 else ""
+        standard = (str(df['標準分'].iloc[0])
+                    if len(df) > 0 and '標準分' in df.columns else "")
     except Exception:
         return None
-    return (ratings, handicap, str(no_bet or ""), str(comment or ""))
+    return (ratings, handicap, standard, str(no_bet or ""), str(comment or ""))
 
 
 def uk_is_dirty():
@@ -1890,9 +1892,34 @@ def uk_scoring_ui(gs_client):
 
         st.session_state.scoring_df['預計評分'] = edited['預計評分']
 
-        calculated_df = calculate_uk_scores(st.session_state.scoring_df)
+        # 標準分：下載嗰陣按最高國際評分定咗115或者100，寫死落Sheet。
+        # 但呢個數其實係任set嘅，set得太高就會令大部分馬嘅「優勢」變負數，睇落好怪。
+        # 所以平磅賽畀分析師自己改。
+        # （讓磅賽唔使：calculate_uk_scores 會將標準分覆蓋成各自嘅國際評分。）
+        res_col1, res_col2 = st.columns([3, 1])
 
-        st.write("**排序結果（按知舍優勢由高至低）**")
+        with res_col2:
+            if not is_handicap_checkbox:
+                try:
+                    current_std = int(float(st.session_state.scoring_df['標準分'].iloc[0]))
+                except Exception:
+                    current_std = 100
+                new_std = st.number_input(
+                    "標準分（可自訂）",
+                    value=current_std,
+                    step=1,
+                    key="scoring_standard_score",
+                    help="優勢 = 預計評分 － 標準分。改呢個數會即刻重新計同重新排序。"
+                )
+                if str(new_std) != str(current_std):
+                    st.session_state.scoring_df['標準分'] = new_std
+            else:
+                st.caption("讓磅賽：標準分 = 各自嘅國際評分，唔使自訂")
+
+        with res_col1:
+            st.write("**排序結果（按知舍優勢由高至低）**")
+
+        calculated_df = calculate_uk_scores(st.session_state.scoring_df)
         display_cols = ['馬號', '馬名', '預計評分', '標準分', '優勢', '調整評分', '知舍優勢']
         st.dataframe(calculated_df[display_cols], use_container_width=True)
 
