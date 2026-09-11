@@ -1635,11 +1635,82 @@ def fetch_sifu_picks(client, race_name):
     if not rows:
         return None, warnings, f"{race_name} 一隻馬都未pick過。"
 
-    df = pd.DataFrame(rows)
-    df["_rating_num"] = pd.to_numeric(df["Rating"], errors="coerce").fillna(-9999)
-    df = df.sort_values("_rating_num", ascending=False).reset_index(drop=True)
-    df = df.drop(columns=["_rating_num"])
-    return df, warnings, "成功"
+    return sifu_sort(pd.DataFrame(rows)), warnings, "成功"
+
+
+def sifu_sort_key(name, rating, initial=None):
+    """一隻馬嘅排序值。初出馬如果有定位就用嗰個數，冇就排最後。"""
+    value = (initial or {}).get(str(name), rating)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return -9999.0
+
+
+def sifu_sort(df, initial=None, tie=None):
+    """
+    按 Rating 由高至低排。
+
+    三層排序：
+      1. Rating（初出馬用佢嘅定位數，但顯示照樣係「初出」）
+      2. 同分時，分析師設定嘅先後（數字細排前）
+      3. 都一樣就保持原本次序
+
+    ⚠️ pandas 嘅 sort_values 預設係 quicksort，**唔穩定** —— 同分嘅馬
+       次序係唔確定嘅，同一批資料跑兩次都可能唔同。所以呢度指定
+       kind="stable"，同分而又冇設定先後嘅時候，至少次序係固定嘅。
+    """
+    out = df.copy()
+    tie = tie or {}
+
+    out["_k1"] = [-sifu_sort_key(n, r, initial)
+                  for n, r in zip(out["馬匹"], out["Rating"])]   # 負數 = 由大到細
+    out["_k2"] = [float(tie.get(str(n), 0) or 0) for n in out["馬匹"]]
+    out["_k3"] = range(len(out))
+
+    out = out.sort_values(["_k1", "_k2", "_k3"], kind="stable").reset_index(drop=True)
+    return out.drop(columns=["_k1", "_k2", "_k3"])
+
+
+def sifu_tie_groups(df, initial=None):
+    """
+    揾出同分嘅馬（兩隻或以上排序值一樣）。
+    回傳 [(排序值顯示文字, [馬匹, ...]), ...]，跟返表入面嘅次序。
+    """
+    groups = {}
+    order = []
+    for name, rating in zip(df["馬匹"], df["Rating"]):
+        k = sifu_sort_key(name, rating, initial)
+        if k not in groups:
+            groups[k] = {"label": str(rating), "horses": []}
+            order.append(k)
+        groups[k]["horses"].append(str(name))
+    return [(groups[k]["label"], groups[k]["horses"])
+            for k in order if len(groups[k]["horses"]) > 1]
+
+
+def sifu_pending_initial(df):
+    """揾出仲未定位嘅初出馬（Rating唔係數字）"""
+    out = []
+    for _, row in df.iterrows():
+        try:
+            float(row["Rating"])
+        except (TypeError, ValueError):
+            out.append(str(row["馬匹"]))
+    return out
+
+
+def sifu_apply_settings(df, settings):
+    """
+    套用分析師嘅設定（初出定位 + 同分先後），重新排序。
+    Rating欄嘅文字唔會改（初出照樣印「初出」）。
+
+    ⚠️ 呢啲設定只喺 Sifu_{場次} tab 度存一份。
+       05 生成嗰張sheet唔會保留（佢每次full run都會重寫成個tab），
+       所以唔好喺嗰邊改，改咗都會冇。
+    """
+    settings = settings or {}
+    return sifu_sort(df, settings.get("initial"), settings.get("tie"))
 
 
 def sifu_meta_worksheet(client, race_name):
@@ -1654,33 +1725,55 @@ def sifu_meta_worksheet(client, race_name):
     try:
         return sh.worksheet(tab)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=tab, rows="5", cols="3")
+        ws = sh.add_worksheet(title=tab, rows="5", cols="4")
         safe_gsheet_call(ws.update, range_name="A1",
-                         values=[["場次", "No Bet 指數", "師妹的話"], [race_name, "", ""]],
+                         values=[["場次", "No Bet 指數", "師妹的話", "排序設定(JSON)"],
+                                 [race_name, "", "", ""]],
                          value_input_option="USER_ENTERED")
         return ws
 
 
+def normalize_sifu_settings(raw):
+    """
+    設定統一做 {"initial": {...}, "tie": {...}}。
+    舊格式（淨係一個 馬匹→定位數 嘅dict）都收，當係 initial。
+    """
+    if not isinstance(raw, dict):
+        return {"initial": {}, "tie": {}}
+    if "initial" in raw or "tie" in raw:
+        return {"initial": dict(raw.get("initial") or {}),
+                "tie": dict(raw.get("tie") or {})}
+    return {"initial": dict(raw), "tie": {}}
+
+
 def fetch_sifu_meta(client, race_name):
+    """回傳 (no_bet, comment, settings)"""
     try:
         ws = sifu_meta_worksheet(client, race_name)
         data = ws.get_all_values()
         if len(data) < 2:
-            return "", ""
+            return "", "", normalize_sifu_settings({})
         row = data[1]
         no_bet = row[1] if len(row) > 1 else ""
         comment = row[2] if len(row) > 2 else ""
-        return normalize_no_bet(no_bet), comment
+        raw = row[3] if len(row) > 3 else ""
+        try:
+            parsed = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            parsed = {}
+        return normalize_no_bet(no_bet), comment, normalize_sifu_settings(parsed)
     except Exception:
-        return "", ""
+        return "", "", normalize_sifu_settings({})
 
 
-def save_sifu_meta(client, race_name, no_bet, comment):
+def save_sifu_meta(client, race_name, no_bet, comment, settings=None):
     try:
         ws = sifu_meta_worksheet(client, race_name)
+        blob = json.dumps(normalize_sifu_settings(settings or {}),
+                          ensure_ascii=False, sort_keys=True)
         safe_gsheet_call(ws.update, range_name="A1",
-                         values=[["場次", "No Bet 指數", "師妹的話"],
-                                 [race_name, normalize_no_bet(no_bet), comment]],
+                         values=[["場次", "No Bet 指數", "師妹的話", "排序設定(JSON)"],
+                                 [race_name, normalize_no_bet(no_bet), comment, blob]],
                          value_input_option="USER_ENTERED")
         return "成功"
     except Exception as e:
@@ -2139,8 +2232,10 @@ def uk_reset_scoring_state():
 # ==========================================
 # 🐴 師妹刨馬法 介面
 # ==========================================
-def sifu_snapshot(no_bet, comment):
-    return (normalize_no_bet(no_bet), str(comment or ""))
+def sifu_snapshot(no_bet, comment, settings=None):
+    return (normalize_no_bet(no_bet), str(comment or ""),
+            json.dumps(normalize_sifu_settings(settings or {}),
+                       ensure_ascii=False, sort_keys=True))
 
 
 def sifu_is_dirty():
@@ -2177,13 +2272,14 @@ def sifu_do_load(gs_client, race_name):
         for w in warnings:
             st.warning(w)
         return False
-    no_bet, comment = fetch_sifu_meta(gs_client, race_name)
+    no_bet, comment, settings = fetch_sifu_meta(gs_client, race_name)
     st.session_state.sifu_df = df
     st.session_state.sifu_warnings = warnings
     st.session_state.sifu_no_bet = no_bet
     st.session_state.sifu_comment = comment
+    st.session_state.sifu_settings = settings
     st.session_state.sifu_loaded_race = race_name
-    snap = sifu_snapshot(no_bet, comment)
+    snap = sifu_snapshot(no_bet, comment, settings)
     st.session_state.sifu_saved_snapshot = snap
     st.session_state.sifu_current_snapshot = snap
     for k in ("sifu_no_bet_input", "sifu_comment_input"):
@@ -2221,7 +2317,8 @@ def sifu_scoring_ui(gs_client):
             if st.button(f"💾 先儲存返 {sifu_loaded}", type="primary", use_container_width=True):
                 result = save_sifu_meta(gs_client, sifu_loaded,
                                         st.session_state.get("sifu_no_bet_input", ""),
-                                        st.session_state.get("sifu_comment_input", ""))
+                                        st.session_state.get("sifu_comment_input", ""),
+                                        st.session_state.get("sifu_settings", {}))
                 if result == "成功":
                     st.session_state.sifu_saved_snapshot = st.session_state.get("sifu_current_snapshot")
                     st.session_state.pop("sifu_pending_load", None)
@@ -2248,8 +2345,53 @@ def sifu_scoring_ui(gs_client):
         st.warning(w)
 
     df = st.session_state.sifu_df
-    st.write(f"**預覽（{len(df)} 隻馬，按 Rating 由高至低）**")
-    st.dataframe(sifu_style_preview(df), use_container_width=True, hide_index=True)
+    settings = normalize_sifu_settings(st.session_state.get("sifu_settings", {}))
+    initial = dict(settings["initial"])
+    tie = dict(settings["tie"])
+    race_key = st.session_state.get("sifu_loaded_race")
+
+    # ── 初出馬定位 ──
+    # 初出馬冇歷史，所以冇Rating。分析師喺呢度畀個分，佢就會攝入對應位置。
+    pending = sifu_pending_initial(df)
+    if pending:
+        st.markdown("**初出馬定位**（畀個分決定佢排邊個位；張表照樣印「初出」，"
+                    "唔會印個數字。留空就排最後）")
+        cols = st.columns(min(3, len(pending)))
+        for i, horse in enumerate(pending):
+            with cols[i % len(cols)]:
+                val = st.text_input(horse, value=str(initial.get(horse, "")),
+                                    key=f"sifu_init_{race_key}_{horse}",
+                                    placeholder="例如 20").strip()
+                if val:
+                    initial[horse] = val
+                else:
+                    initial.pop(horse, None)
+
+    # ── 同分排序 ──
+    # 同分嘅馬，邊隻排前面本身冇客觀答案。唔畀你揀就會係隨機
+    # （pandas 預設 quicksort 唔穩定），所以要喺呢度定。
+    groups = sifu_tie_groups(sifu_sort(df, initial, tie), initial)
+    if groups:
+        st.markdown("**同分排序**（數字細嘅排前面）")
+        for label, horses in groups:
+            st.caption(f"Rating {label}　—　{len(horses)} 隻同分")
+            gcols = st.columns(len(horses))
+            for i, horse in enumerate(horses):
+                with gcols[i]:
+                    tie[horse] = st.number_input(
+                        horse, min_value=1, max_value=len(horses),
+                        value=int(tie.get(horse, i + 1)), step=1,
+                        key=f"sifu_tie_{race_key}_{horse}"
+                    )
+
+    settings = {"initial": initial, "tie": tie}
+    st.session_state.sifu_settings = settings
+
+    display_df = sifu_apply_settings(df, settings)
+    st.session_state.sifu_display_df = display_df
+
+    st.write(f"**預覽（{len(display_df)} 隻馬，按 Rating 由高至低）**")
+    st.dataframe(sifu_style_preview(display_df), use_container_width=True, hide_index=True)
 
     st.divider()
     no_bet_input = st.text_input(
@@ -2264,7 +2406,8 @@ def sifu_scoring_ui(gs_client):
         height=180
     )
 
-    st.session_state.sifu_current_snapshot = sifu_snapshot(no_bet_input, comment_input)
+    st.session_state.sifu_current_snapshot = sifu_snapshot(
+        no_bet_input, comment_input, st.session_state.get("sifu_settings", {}))
     save_target = st.session_state.get("sifu_loaded_race") or race_name
 
     if save_target != race_name:
@@ -2278,7 +2421,8 @@ def sifu_scoring_ui(gs_client):
     if st.button(f"💾 儲存去雲端（{save_target}）", type="primary",
                  use_container_width=True) and gs_client:
         with st.spinner("儲存中..."):
-            result = save_sifu_meta(gs_client, save_target, no_bet_input, comment_input)
+            result = save_sifu_meta(gs_client, save_target, no_bet_input, comment_input,
+                                    st.session_state.get("sifu_settings", {}))
         if result == "成功":
             st.session_state.sifu_saved_snapshot = st.session_state.sifu_current_snapshot
             st.success(f"已儲存 {save_target}！")
@@ -2304,9 +2448,16 @@ def sifu_image_ui(gs_client):
         for w in warnings:
             st.warning(w)
 
-        no_bet, comment = fetch_sifu_meta(gs_client, race_to_draw)
+        no_bet, comment, settings = fetch_sifu_meta(gs_client, race_to_draw)
         if not comment:
             st.warning("⚠️ 呢場仲未有師妹的話，張圖個評語區會空白。")
+
+        df = sifu_apply_settings(df, settings)
+        still_pending = sifu_pending_initial(df)
+        if still_pending:
+            st.warning("⚠️ 以下初出馬仲未定位，會排喺最後："
+                       + "、".join(still_pending)
+                       + "。要改就返「寫評語」嗰頁設定。")
 
         try:
             result_img = draw_sifu_image(SIFU_TEMPLATE, df, no_bet, comment)
