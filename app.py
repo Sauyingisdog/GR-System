@@ -63,6 +63,29 @@ def clean_rating(rating_str):
     num = re.sub(r'\D', '', str(rating_str))
     return int(num) if num else 0
 
+def flash(message, kind="success"):
+    """
+    寄存一個訊息，等下一次rerun先顯示。
+
+    ⚠️ st.success() 畫嘅嘢唔會跨rerun生存：如果緊接住就 st.rerun()，
+       個通知只會閃半秒就冇。所以要先寄存，rerun之後再由 show_flash() 攞返出嚟。
+    """
+    st.session_state["_flash"] = (kind, message)
+
+
+def show_flash():
+    data = st.session_state.pop("_flash", None)
+    if not data:
+        return
+    kind, message = data
+    if kind == "error":
+        st.error(message)
+    elif kind == "warning":
+        st.warning(message)
+    else:
+        st.success(message)
+
+
 def normalize_no_bet(value):
     """
     No Bet 指數統一只存一個數字。
@@ -1308,12 +1331,13 @@ def pace_do_load(gs_client, race_name):
                          st.session_state.get("pace_track_type", ""))
     st.session_state.pace_saved_snapshot = snap
     st.session_state.pace_current_snapshot = snap
-    st.success(f"已讀取 {race_name} 嘅 {len(horses_df)} 匹馬，並按檔位初始排位。")
+    flash(f"已讀取 {race_name} 嘅 {len(horses_df)} 匹馬，並按檔位初始排位。")
     return True
 
 
 def pace_map_ui(gs_client):
     st.subheader("📊 步速圖系統")
+    show_flash()
 
     tab1, tab2 = st.tabs(["✏️ 排位輸入（分析師）", "🎨 出圖（出圖負責人）"])
 
@@ -1775,7 +1799,7 @@ def uk_do_load(gs_client, race_num):
     for k in ("scoring_editor", "scoring_no_bet_input", "scoring_comment_input",
               "scoring_is_handicap"):
         st.session_state.pop(k, None)
-    st.success(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
+    flash(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
     return True
 
 
@@ -1796,6 +1820,7 @@ def uk_reset_scoring_state():
 
 def uk_scoring_ui(gs_client):
     st.subheader("✍️ 英國賽事入分（分析師用）")
+    show_flash()
 
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -1809,7 +1834,7 @@ def uk_scoring_ui(gs_client):
             if "成功" in msg:
                 # 雲端已經重寫晒，畫面上嗰啲舊分／No Bet／徒弟的話全部作廢
                 uk_reset_scoring_state()
-                st.success(msg + "（已經清走畫面上嘅舊入分資料）")
+                flash(msg + "（已經清走畫面上嘅舊入分資料）")
                 st.rerun()
             else:
                 st.error(msg)
@@ -2023,7 +2048,7 @@ def aus_do_load(gs_client, race_num):
     snap = aus_snapshot(df)
     st.session_state.aus_saved_snapshot = snap
     st.session_state.aus_current_snapshot = snap
-    st.success(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
+    flash(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
     return True
 
 
@@ -2041,6 +2066,7 @@ def aus_reset_scoring_state():
 
 def aus_scoring_ui(gs_client):
     st.subheader("✍️ 澳洲Form Guide入分（分析師用）")
+    show_flash()
 
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -2053,7 +2079,7 @@ def aus_scoring_ui(gs_client):
                 msg = fetch_and_push_aus(date_input_aus_scoring, gs_client)
             if "成功" in msg:
                 aus_reset_scoring_state()
-                st.success(msg + "（已經清走畫面上嘅舊標記）")
+                flash(msg + "（已經清走畫面上嘅舊標記）")
                 st.rerun()
             else:
                 st.error(msg)
