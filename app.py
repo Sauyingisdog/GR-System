@@ -1555,16 +1555,31 @@ MEMO_BAND_TODAY = "#000000"
 MEMO_BAND_LAST = "#38761d"
 
 
+# Secrets 個 key 名。四個本機script用嘅環境變數叫 SUPABASE_DB_URL，
+# 所以兩個寫法都收，唔使你記住邊度用邊個大細楷。
+SUPABASE_SECRET_KEYS = ("SUPABASE_DB_URL", "supabase_db_url")
+
+
 def get_supabase_conn():
-    """Streamlit 連 Supabase。connection string 放喺 secrets 嘅 supabase_db_url。"""
-    url = st.secrets.get("supabase_db_url")
+    """Streamlit 連 Supabase。connection string 放喺 secrets。"""
+    url = None
+    for key in SUPABASE_SECRET_KEYS:
+        try:
+            value = st.secrets.get(key)
+        except Exception:
+            value = None
+        if value:
+            url = value
+            break
+
     if not url:
         raise RuntimeError(
-            "Secrets 入面搵唔到 supabase_db_url。\n"
-            "去 Streamlit Cloud → app → Settings → Secrets 加一行："
-            'supabase_db_url = "postgresql://..."'
+            "Secrets 入面搵唔到 Supabase connection string。\n"
+            "去 Streamlit Cloud → app → Settings → Secrets，加一行：\n"
+            'SUPABASE_DB_URL = "postgresql://..."\n'
+            f"（{' 或者 '.join(SUPABASE_SECRET_KEYS)} 都收）"
         )
-    return psycopg2.connect(url)
+    return psycopg2.connect(str(url).strip())
 
 
 def _memo_date_param(date_str):
