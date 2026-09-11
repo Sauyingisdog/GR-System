@@ -1551,6 +1551,8 @@ MEMO_DRAW_OUTSIDE_FILL = "#f4cccc"  # 檔 10-14
 MEMO_DRAW_INSIDE_FILL = "#b6d7a8"   # 檔 1-3
 MEMO_ODDS_COLORS = {"F": "#ff0000", "G": "#34a853", "B": "#e69138"}  # 反白粗體，F最大
 MEMO_INITIAL_FILL = "#fffaea"       # 初出馬成行
+MEMO_EARN_FILL = "#d9ead3"          # 含「賺」字：賺快／賺慢／賺變奏／賺
+MEMO_LOSE_FILL = "#f4cccc"          # 其餘有內容嘅：蝕快、3疊、獸醫報告等
 MEMO_BAND_TODAY = "#000000"
 MEMO_BAND_LAST = "#38761d"
 
@@ -1683,6 +1685,20 @@ def fetch_memo_rows(date_str, race_no):
 def _hex_to_rgb(value):
     v = str(value).lstrip("#")
     return tuple(int(v[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def memo_place_text(value):
+    """
+    名次簡寫：「6 平頭馬」→「6平」、「3」→「3」。
+    個欄得 54px，「6 平頭馬」成句塞落去要縮到細過螞蟻，
+    縮做兩個字就讀得清楚之餘，又保留到平頭馬呢個資訊。
+    非數字（例如 WV、退出）照原文。
+    """
+    text = str(value or "").strip()
+    m = re.match(r"^\s*(\d+)", text)
+    if not m:
+        return text
+    return f"{m.group(1)}平" if "平頭馬" in text else m.group(1)
 
 
 def memo_place_style(value):
@@ -1821,9 +1837,10 @@ def draw_memo_image(rows, race_no, date_str=""):
         row_bg = MEMO_INITIAL_FILL if is_initial else "white"
         draw.rectangle([0, y, table_w, y + L["row_h"]], fill=row_bg)
 
+        # 每格 = (內容, 底色, 字色, 要唔要加粗)
         cells = []
         for name in MEMO_TODAY_COLS:
-            cells.append((row.get(name), None, "black"))
+            cells.append((row.get(name), None, "black", False))
 
         if is_initial:
             # 初出：上仗嗰十欄當成一格合併儲存格（冇間隔線），「初出」靠左。
@@ -1835,33 +1852,36 @@ def draw_memo_image(rows, race_no, date_str=""):
             ty = y + (L["row_h"] - (bbox[3] - bbox[1])) / 2 - bbox[1]
             draw.text((last_x + L["pad"] + 2, ty), "初出", fill="black", font=font_cell)
         else:
+            # 名次頭三名：反白字再加粗（PIL冇得synthesize粗體，用stroke扮）
             place_fill, place_white = memo_place_style(last.get("名次"))
-            cells.append((last.get("名次"), place_fill, "white" if place_white else "black"))
-            cells.append((last.get("總場"), None, "black"))
-            cells.append((last.get("班"), None, "black"))
+            cells.append((memo_place_text(last.get("名次")), place_fill,
+                          "white" if place_white else "black", place_white))
+            cells.append((last.get("總場"), None, "black", False))
+            cells.append((last.get("班"), None, "black", False))
 
             cd_fill = (MEMO_CD_MATCH_FILL
                        if last.get("路程") and last.get("路程") == row.get("_today_track")
                        else None)
-            cells.append((last.get("路程"), cd_fill, "black"))
-            cells.append((last.get("檔"), memo_draw_style(last.get("檔")), "black"))
+            cells.append((last.get("路程"), cd_fill, "black", False))
+            cells.append((last.get("檔"), memo_draw_style(last.get("檔")), "black", False))
 
             odds_fill = memo_odds_style(last.get("_odds_cat"))
             cells.append((memo_format_odds(last.get("賠率")), odds_fill,
-                          "white" if odds_fill else "black"))
+                          "white" if odds_fill else "black", bool(odds_fill)))
 
             for name in ("步速", "偏差", "轉彎", "賽後"):
                 value = last.get(name)
-                # 除咗「賺」用綠，其餘有內容嘅一律粉紅底黑字
                 if not value:
-                    cells.append(("", None, "black"))
-                elif str(value).strip() == "賺":
-                    cells.append((value, "#d9ead3", "black"))
+                    cells.append(("", None, "black", False))
+                elif "賺" in str(value):
+                    # 賺快／賺慢／賺變奏／賺 —— 只要有個「賺」字就係綠。
+                    # ⚠️ 唔可以夾 == "賺"，咁樣「賺快」會落咗粉紅。
+                    cells.append((value, MEMO_EARN_FILL, "black", False))
                 else:
-                    cells.append((value, "#f4cccc", "black"))
+                    cells.append((value, MEMO_LOSE_FILL, "black", False))
 
         cxx = 0
-        for i, (value, fill, colour) in enumerate(cells):   # 初出行只得頭三欄
+        for i, (value, fill, colour, bold) in enumerate(cells):   # 初出行只得頭三欄
             text = "" if value is None else str(value)
             if fill:
                 draw.rectangle([cxx + 1, y + 1, cxx + widths[i] - 1, y + L["row_h"] - 1],
@@ -1871,7 +1891,11 @@ def draw_memo_image(rows, race_no, date_str=""):
             if text:
                 fnt = fit_font(text, widths[i] - 2 * L["pad"], L["font_size"])
                 tx, ty = centered(text, fnt, cxx, widths[i], y, L["row_h"])
-                draw.text((tx, ty), text, fill=colour, font=fnt)
+                if bold:
+                    draw.text((tx, ty), text, fill=colour, font=fnt,
+                              stroke_width=1, stroke_fill=colour)
+                else:
+                    draw.text((tx, ty), text, fill=colour, font=fnt)
             cxx += widths[i]
         y += L["row_h"]
 
