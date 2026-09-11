@@ -1558,6 +1558,15 @@ SIFU_RATING_GREEN_MIN = 30               # Rating >= 呢個數就綠底反白
 SIFU_RATING_GREEN_COLOR = "#34a853"
 
 
+def strip_brand_no(name):
+    """
+    「實力股 (L411)」→「實力股」。
+    出圖只印馬名，烙號係內部識別用，唔使畀讀者見。
+    預覽表就照樣保留烙號，方便分析師認馬。
+    """
+    return re.sub(r"\s*\([^)]*\)\s*$", "", str(name or "")).strip()
+
+
 def sifu_gear_is_red(text):
     t = str(text or "")
     return any(tok in t for tok in SIFU_GEAR_RED_TOKENS)
@@ -1689,14 +1698,23 @@ def sifu_tie_groups(df, initial=None):
             for k in order if len(groups[k]["horses"]) > 1]
 
 
-def sifu_pending_initial(df):
-    """揾出仲未定位嘅初出馬（Rating唔係數字）"""
+def sifu_pending_initial(df, initial=None):
+    """
+    揾出初出馬（Rating唔係數字嗰啲）。
+
+    initial 有畀嘅話，已經定咗位嘅就唔會計入去 —— 咁就變成「仲未定位」嘅清單。
+    ⚠️ 唔可以淨係睇Rating係咪數字：我哋特登令初出馬嘅Rating永遠顯示「初出」，
+       所以定咗位之後Rating一樣唔係數字，一定要對埋 initial 先知有冇定過。
+    """
+    initial = initial or {}
     out = []
     for _, row in df.iterrows():
+        name = str(row["馬匹"])
         try:
             float(row["Rating"])
         except (TypeError, ValueError):
-            out.append(str(row["馬匹"]))
+            if name not in initial:
+                out.append(name)
     return out
 
 
@@ -1883,6 +1901,8 @@ def draw_sifu_image(template_path, df, no_bet_text, comment_text):
         cx = x0
         for i, field in enumerate(fields):
             val = str(row.get(field, "") or "")
+            if field == "馬匹":
+                val = strip_brand_no(val)
             col_w = widths[i]
 
             cell_font = fit_font(val, col_w - 2 * L["cell_pad"], L["font_table"])
@@ -2453,7 +2473,7 @@ def sifu_image_ui(gs_client):
             st.warning("⚠️ 呢場仲未有師妹的話，張圖個評語區會空白。")
 
         df = sifu_apply_settings(df, settings)
-        still_pending = sifu_pending_initial(df)
+        still_pending = sifu_pending_initial(df, settings.get("initial"))
         if still_pending:
             st.warning("⚠️ 以下初出馬仲未定位，會排喺最後："
                        + "、".join(still_pending)
