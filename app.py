@@ -1309,7 +1309,7 @@ def pace_unsaved_banner():
         st.error(
             f"⚠️ 你喺「步速圖」仲有未儲存嘅排位："
             f"**{st.session_state.get('pace_loaded_race')}**。\n\n"
-            f"揀返「📊 步速圖」就可以繼續，個 grid 仲喺度。"
+            f"揀返「{PAGE_PACE}」就可以繼續，個 grid 仲喺度。"
         )
 
 
@@ -1526,6 +1526,324 @@ def pace_map_ui(gs_client):
                 st.download_button("💾 下載圖片", data=byte_im, file_name=f"PaceMap_{race_to_load}.png", mime="image/png")
             else:
                 st.error(f"❌ 讀取失敗：{msg}")
+
+# ==========================================
+# 🐴 師妹刨馬法 核心函數
+# ==========================================
+# 資料來源：05_master_pick.py 生成嗰張 Google Sheet 嘅 R1/R2/... tab。
+#
+# 點解唔用 Supabase：
+#   分析師係喺嗰張sheet度逐隻馬揀「最似會跑出邊場嘅水準」，
+#   個Pick只存喺嗰張sheet，冇同步去Supabase。
+#   而且每一行歷史都已經帶住「今場mirror」(場/號/馬匹/檔/配備)，
+#   所以揀中嗰行一行就有齊六樣嘢，唔使再去第二度撈。
+
+MASTER_PICK_SHEET_ID = "1rlybFVRd5eMr3j2SieJioG9v-B3fXQOpZVu4yvTjsSo"
+SIFU_TEMPLATE = "cmui.png"
+
+# master pick sheet 嘅欄位位置（0-based）
+MP_COL_HORSE_TITLE = 13   # 馬名（標題行 "===== 馬名 (烙號) ====="）
+MP_COL_VENUE = 52         # 場
+MP_COL_NO = 53            # 號
+MP_COL_HORSE = 54         # 馬匹
+MP_COL_DRAW = 55          # 檔
+MP_COL_GEAR = 56          # 配備
+MP_COL_RATING = 57        # Rating
+MP_COL_PICK = 61          # Pick
+
+# ── 條件格式（同Main Chart嗰邊嘅規則一一對應，改咗一邊記得改另一邊）──
+SIFU_GEAR_RED_TOKENS = ("1", "2", "-")   # 配備含任何一個就變紅
+SIFU_GEAR_RED_COLOR = "#ff0000"
+SIFU_RATING_GREEN_MIN = 30               # Rating >= 呢個數就綠底反白
+SIFU_RATING_GREEN_COLOR = "#34a853"
+
+
+def sifu_gear_is_red(text):
+    t = str(text or "")
+    return any(tok in t for tok in SIFU_GEAR_RED_TOKENS)
+
+
+def sifu_rating_is_green(value):
+    try:
+        return float(value) >= SIFU_RATING_GREEN_MIN
+    except (TypeError, ValueError):
+        return False
+
+
+def fetch_sifu_picks(client, race_name):
+    """
+    由 master pick sheet 嘅指定tab，攞返每隻馬被pick嗰一行。
+
+    回傳 (df, warnings, msg)
+      df: 場/號/馬匹/檔/配備/Rating，已經按Rating由高至低排好
+      warnings: 冇pick或者pick咗多過一行嘅馬（出畀分析師睇，唔會靜靜地漏）
+    """
+    try:
+        sh = client.open_by_key(MASTER_PICK_SHEET_ID)
+        worksheet = sh.worksheet(race_name)
+        data = worksheet.get_all_values()
+    except gspread.exceptions.WorksheetNotFound:
+        return None, [], f"搵唔到 {race_name} 呢個tab，請先喺本機跑 05_master_pick.py。"
+    except Exception as e:
+        return None, [], str(e)
+
+    if len(data) < 2:
+        return None, [], f"{race_name} 入面冇資料。"
+
+    def cell(row, i):
+        return row[i].strip() if len(row) > i and row[i] else ""
+
+    picks_by_horse = {}
+    order = []
+    current = None
+
+    for row in data[1:]:
+        title = cell(row, MP_COL_HORSE_TITLE)
+        if title.startswith("===== ") and title.endswith(" ====="):
+            current = title.replace("===== ", "").replace(" =====", "")
+            picks_by_horse.setdefault(current, [])
+            order.append(current)
+            continue
+        if current is None:
+            continue
+        if not cell(row, MP_COL_PICK):
+            continue
+        picks_by_horse[current].append({
+            "場": cell(row, MP_COL_VENUE),
+            "號": cell(row, MP_COL_NO),
+            "馬匹": cell(row, MP_COL_HORSE),
+            "檔": cell(row, MP_COL_DRAW),
+            "配備": cell(row, MP_COL_GEAR),
+            "Rating": cell(row, MP_COL_RATING),
+        })
+
+    if not order:
+        return None, [], f"{race_name} 入面搵唔到任何馬（冇 \"===== 馬名 =====\" 標題行）。"
+
+    warnings = []
+    rows = []
+    for horse in order:
+        got = picks_by_horse.get(horse, [])
+        if len(got) == 0:
+            warnings.append(f"❌ {horse} 完全冇pick，唔會出現喺張表度")
+        elif len(got) > 1:
+            warnings.append(f"⚠️ {horse} pick咗 {len(got)} 行，只會用第一行")
+            rows.append(got[0])
+        else:
+            rows.append(got[0])
+
+    if not rows:
+        return None, warnings, f"{race_name} 一隻馬都未pick過。"
+
+    df = pd.DataFrame(rows)
+    df["_rating_num"] = pd.to_numeric(df["Rating"], errors="coerce").fillna(-9999)
+    df = df.sort_values("_rating_num", ascending=False).reset_index(drop=True)
+    df = df.drop(columns=["_rating_num"])
+    return df, warnings, "成功"
+
+
+def sifu_meta_worksheet(client, race_name):
+    """
+    攞返（冇就自動開）存No Bet同師妹的話嘅tab。
+
+    ⚠️ 一定唔可以存返去 master pick sheet：05 跑full模式會 worksheet.clear()
+       再重寫成個tab，評語會冇晒。所以存喺出圖系統自己嗰張spreadsheet。
+    """
+    sh = client.open_by_key(SHEET_ID)
+    tab = f"Sifu_{race_name}"
+    try:
+        return sh.worksheet(tab)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=tab, rows="5", cols="3")
+        safe_gsheet_call(ws.update, range_name="A1",
+                         values=[["場次", "No Bet 指數", "師妹的話"], [race_name, "", ""]],
+                         value_input_option="USER_ENTERED")
+        return ws
+
+
+def fetch_sifu_meta(client, race_name):
+    try:
+        ws = sifu_meta_worksheet(client, race_name)
+        data = ws.get_all_values()
+        if len(data) < 2:
+            return "", ""
+        row = data[1]
+        no_bet = row[1] if len(row) > 1 else ""
+        comment = row[2] if len(row) > 2 else ""
+        return normalize_no_bet(no_bet), comment
+    except Exception:
+        return "", ""
+
+
+def save_sifu_meta(client, race_name, no_bet, comment):
+    try:
+        ws = sifu_meta_worksheet(client, race_name)
+        safe_gsheet_call(ws.update, range_name="A1",
+                         values=[["場次", "No Bet 指數", "師妹的話"],
+                                 [race_name, normalize_no_bet(no_bet), comment]],
+                         value_input_option="USER_ENTERED")
+        return "成功"
+    except Exception as e:
+        return str(e)
+
+
+def draw_sifu_image(template_path, df, no_bet_text, comment_text):
+    """
+    畫師妹刨馬法出圖。
+
+    ⚠️ 所有座標同尺寸集中喺下面個LAYOUT，方便你自己校準。
+       數字係由你張sample量返出嚟嘅（表格區 x185–814、頂224、行高44、
+       Rating欄 x699–811、底色 #fffaea、評語區 x122 起闊823 行距32）。
+       但你張sample係將Google Sheet截圖貼上去，而呢度係用PIL重新畫，
+       所以唔會pixel-perfect一樣，睇完覺得要郁就改呢個dict。
+    """
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(f"搵唔到底圖 {template_path}，請確認已經上傳到 GitHub。")
+
+    L = {
+        "table_x": 185,
+        "table_top": 224,
+        "table_bottom_limit": 910,     # 唔可以再低，低過就撞到「師妹的話」個框
+        "col_widths": [66, 66, 188, 66, 126, 117],   # 場 號 馬匹 檔 配備 Rating（加起嚟 = 629）
+        "header_h": 46,
+        "row_h": 44,
+        "cell_pad": 8,
+        "font_table": 24,
+        "header_bg": "#ece7d5",
+        "row_bg": "#fffaea",
+        "line_color": "#d8d2bd",
+        "no_bet_center": (900, 890),
+        "font_no_bet": 42,
+        "comment_x": 122,
+        "comment_y": 968,
+        "comment_width": 823,
+        "comment_line_h": 32,
+        "font_comment": 25,
+    }
+
+    image = Image.open(template_path).convert("RGB")
+    draw = ImageDraw.Draw(image)
+
+    font_filename = "LXGWWenKaiTC-Bold.ttf"
+
+    def load_font(size):
+        try:
+            return ImageFont.truetype(font_filename, size)
+        except Exception:
+            return ImageFont.load_default()
+
+    font_tbl = load_font(L["font_table"])
+    font_no_bet = load_font(L["font_no_bet"])
+    font_cmt = load_font(L["font_comment"])
+
+    n = len(df)
+    row_h = L["row_h"]
+    available = L["table_bottom_limit"] - L["table_top"] - L["header_h"]
+    if n > 0 and n * row_h > available:
+        row_h = max(24, available // n)     # 馬多過平時就收窄啲，唔好撞落評語框
+
+    headers = ["場", "號", "馬匹", "檔", "配備", "Rating"]
+    fields = ["場", "號", "馬匹", "檔", "配備", "Rating"]
+    widths = L["col_widths"]
+    table_w = sum(widths)
+    x0 = L["table_x"]
+    y = L["table_top"]
+
+    def text_v_center(text, font, top, height):
+        """用字體本身嘅bbox垂直置中，咁樣換字體都唔使重新調offset"""
+        bbox = font.getbbox(text or "x")
+        return top + (height - (bbox[3] - bbox[1])) / 2 - bbox[1]
+
+    _font_cache = {}
+
+    def fit_font(text, max_width, base_size):
+        """
+        字太長就自動縮細，唔好爆出隔離欄。
+        馬名長短差好遠（「瑪瑙 (G306)」vs「建測羣英 (H070)」），
+        而且換字體闊度會變，所以唔可以靠固定欄寬夾硬塞。
+        """
+        size = base_size
+        while size > 12:
+            fnt = _font_cache.get(size)
+            if fnt is None:
+                fnt = load_font(size)
+                _font_cache[size] = fnt
+            if fnt.getlength(str(text or "")) <= max_width:
+                return fnt
+            size -= 1
+        return _font_cache.get(12) or load_font(12)
+
+    # ── 表頭 ──
+    draw.rectangle([x0, y, x0 + table_w, y + L["header_h"]], fill=L["header_bg"])
+    cx = x0
+    for i, htext in enumerate(headers):
+        draw.text((cx + L["cell_pad"], text_v_center(htext, font_tbl, y, L["header_h"])),
+                  htext, fill="black", font=font_tbl)
+        cx += widths[i]
+    y += L["header_h"]
+
+    # ── 每一行 ──
+    for _, row in df.iterrows():
+        draw.rectangle([x0, y, x0 + table_w, y + row_h], fill=L["row_bg"])
+        draw.line([x0, y, x0 + table_w, y], fill=L["line_color"], width=1)
+
+        cx = x0
+        for i, field in enumerate(fields):
+            val = str(row.get(field, "") or "")
+            col_w = widths[i]
+
+            cell_font = fit_font(val, col_w - 2 * L["cell_pad"], L["font_table"])
+
+            if field == "Rating":
+                green = sifu_rating_is_green(val)
+                if green:
+                    draw.rectangle([cx + 2, y + 2, cx + col_w - 2, y + row_h - 2],
+                                   fill=SIFU_RATING_GREEN_COLOR)
+                tw = cell_font.getlength(val)
+                tx = cx + (col_w - tw) / 2          # Rating置中
+                draw.text((tx, text_v_center(val, cell_font, y, row_h)), val,
+                          fill="white" if green else "black", font=cell_font)
+            else:
+                colour = SIFU_GEAR_RED_COLOR if (field == "配備" and sifu_gear_is_red(val)) else "black"
+                draw.text((cx + L["cell_pad"], text_v_center(val, cell_font, y, row_h)),
+                          val, fill=colour, font=cell_font)
+            cx += col_w
+        y += row_h
+
+    draw.line([x0, y, x0 + table_w, y], fill=L["line_color"], width=1)
+
+    # ── No Bet 指數（存嘅時候只有數字，出圖先補返 /10）──
+    no_bet_display = format_no_bet_for_image(no_bet_text)
+    if no_bet_display:
+        tw = font_no_bet.getlength(no_bet_display)
+        bbox = font_no_bet.getbbox(no_bet_display)
+        nx = L["no_bet_center"][0] - tw / 2
+        ny = L["no_bet_center"][1] - (bbox[3] - bbox[1]) / 2 - bbox[1]
+        draw.text((nx, ny), no_bet_display, fill="black", font=font_no_bet)
+
+    # ── 師妹的話（自動折行，標點唔會留喺行頭）──
+    lines, current = [], ""
+    for ch in str(comment_text or ""):
+        if ch == "\n":
+            lines.append(current); current = ""
+            continue
+        if font_cmt.getlength(current + ch) > L["comment_width"]:
+            if ch in "，。、！？」》）":
+                current += ch; lines.append(current); current = ""
+            else:
+                lines.append(current); current = ch
+        else:
+            current += ch
+    if current:
+        lines.append(current)
+
+    cy = L["comment_y"]
+    for line in lines:
+        draw.text((L["comment_x"], cy), line, fill="black", font=font_cmt)
+        cy += L["comment_line_h"]
+
+    return image
+
 
 # ==========================================
 # 📢 賽日推介 核心函數
@@ -1776,9 +2094,9 @@ def uk_unsaved_banner():
     """喺其他頁面頂部提醒：英國入分仲有嘢未儲存"""
     if uk_is_dirty():
         st.error(
-            f"⚠️ 你喺「英國（入分）」仲有未儲存嘅改動："
+            f"⚠️ 你喺「{PAGE_UK_SCORE}」仲有未儲存嘅改動："
             f"**{st.session_state.get('uk_loaded_race')}**。\n\n"
-            f"揀返「🇬🇧 XX英國（入分）」就可以繼續，啲改動仲喺度。"
+            f"揀返「{PAGE_UK_SCORE}」就可以繼續，啲改動仲喺度。"
         )
 
 
@@ -1816,6 +2134,192 @@ def uk_reset_scoring_state():
               "scoring_editor", "scoring_no_bet_input", "scoring_comment_input",
               "scoring_is_handicap"):
         st.session_state.pop(k, None)
+
+
+# ==========================================
+# 🐴 師妹刨馬法 介面
+# ==========================================
+def sifu_snapshot(no_bet, comment):
+    return (normalize_no_bet(no_bet), str(comment or ""))
+
+
+def sifu_is_dirty():
+    if st.session_state.get("sifu_loaded_race") is None:
+        return False
+    return st.session_state.get("sifu_current_snapshot") != st.session_state.get("sifu_saved_snapshot")
+
+
+def sifu_unsaved_banner():
+    if sifu_is_dirty():
+        st.error(
+            f"⚠️ 你喺「{PAGE_SIFU_SCORE}」仲有未儲存嘅嘢："
+            f"**{st.session_state.get('sifu_loaded_race')}**。"
+        )
+
+
+def sifu_style_preview(df):
+    """畀分析師喺畫面度見到同出圖一樣嘅紅字／綠底"""
+    def style_cell(val, col):
+        if col == "配備" and sifu_gear_is_red(val):
+            return f"color: {SIFU_GEAR_RED_COLOR}; font-weight: bold;"
+        if col == "Rating" and sifu_rating_is_green(val):
+            return f"background-color: {SIFU_RATING_GREEN_COLOR}; color: white; font-weight: bold;"
+        return ""
+    return df.style.apply(
+        lambda col: [style_cell(v, col.name) for v in col], axis=0
+    )
+
+
+def sifu_do_load(gs_client, race_name):
+    df, warnings, msg = fetch_sifu_picks(gs_client, race_name)
+    if df is None:
+        st.error(f"❌ {msg}")
+        for w in warnings:
+            st.warning(w)
+        return False
+    no_bet, comment = fetch_sifu_meta(gs_client, race_name)
+    st.session_state.sifu_df = df
+    st.session_state.sifu_warnings = warnings
+    st.session_state.sifu_no_bet = no_bet
+    st.session_state.sifu_comment = comment
+    st.session_state.sifu_loaded_race = race_name
+    snap = sifu_snapshot(no_bet, comment)
+    st.session_state.sifu_saved_snapshot = snap
+    st.session_state.sifu_current_snapshot = snap
+    for k in ("sifu_no_bet_input", "sifu_comment_input"):
+        st.session_state.pop(k, None)
+    flash(f"已讀取 {race_name}，{len(df)} 隻馬有pick。")
+    return True
+
+
+def sifu_scoring_ui(gs_client):
+    st.subheader("✍️ 師妹刨馬法（寫評語）")
+    show_flash()
+    st.caption("資料由 05_master_pick.py 生成嗰張 sheet 嘅 Pick 欄嚟。"
+               "改咗pick就返嚟重新讀一次。")
+
+    if "sifu_race_persist" not in st.session_state:
+        st.session_state.sifu_race_persist = "R1"
+    race_name = st.text_input("場次（例如 R5）:", value=st.session_state.sifu_race_persist,
+                              key="sifu_race_input")
+    st.session_state.sifu_race_persist = race_name
+
+    sifu_loaded = st.session_state.get("sifu_loaded_race")
+
+    if st.button("📥 讀取呢場嘅pick", use_container_width=True) and gs_client:
+        if sifu_is_dirty() and race_name != sifu_loaded:
+            st.session_state.sifu_pending_load = race_name
+        else:
+            sifu_do_load(gs_client, race_name)
+            st.rerun()
+
+    pending = st.session_state.get("sifu_pending_load")
+    if pending:
+        st.error(f"⚠️ **{sifu_loaded}** 嘅評語仲未儲存。讀取 **{pending}** 會冇咗。")
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            if st.button(f"💾 先儲存返 {sifu_loaded}", type="primary", use_container_width=True):
+                result = save_sifu_meta(gs_client, sifu_loaded,
+                                        st.session_state.get("sifu_no_bet_input", ""),
+                                        st.session_state.get("sifu_comment_input", ""))
+                if result == "成功":
+                    st.session_state.sifu_saved_snapshot = st.session_state.get("sifu_current_snapshot")
+                    st.session_state.pop("sifu_pending_load", None)
+                    sifu_do_load(gs_client, pending)
+                    st.rerun()
+                else:
+                    st.error(f"❌ 儲存失敗，冇讀取新一場: {result}")
+        with s2:
+            if st.button("🗑️ 唔要，照讀", use_container_width=True):
+                st.session_state.pop("sifu_pending_load", None)
+                sifu_do_load(gs_client, pending)
+                st.rerun()
+        with s3:
+            if st.button("↩️ 取消", use_container_width=True):
+                st.session_state.pop("sifu_pending_load", None)
+                st.session_state.sifu_race_persist = sifu_loaded
+                st.rerun()
+        st.divider()
+
+    if "sifu_df" not in st.session_state:
+        return
+
+    for w in st.session_state.get("sifu_warnings", []):
+        st.warning(w)
+
+    df = st.session_state.sifu_df
+    st.write(f"**預覽（{len(df)} 隻馬，按 Rating 由高至低）**")
+    st.dataframe(sifu_style_preview(df), use_container_width=True, hide_index=True)
+
+    st.divider()
+    no_bet_input = st.text_input(
+        "No Bet 指數（只填數字，例如 5.5；出圖會自動變成 5.5/10）:",
+        value=normalize_no_bet(st.session_state.get("sifu_no_bet", "")),
+        key="sifu_no_bet_input"
+    )
+    comment_input = st.text_area(
+        "師妹的話:",
+        value=st.session_state.get("sifu_comment", ""),
+        key="sifu_comment_input",
+        height=180
+    )
+
+    st.session_state.sifu_current_snapshot = sifu_snapshot(no_bet_input, comment_input)
+    save_target = st.session_state.get("sifu_loaded_race") or race_name
+
+    if save_target != race_name:
+        st.warning(f"⚠️ 你而家寫緊嘅係 **{save_target}**，但上面個場次寫住 **{race_name}**。"
+                   f"撳儲存只會寫入 **{save_target}**。")
+    if sifu_is_dirty():
+        st.info(f"📝 **{save_target}** 有未儲存嘅改動")
+    else:
+        st.caption(f"✅ {save_target} 已經同雲端一致")
+
+    if st.button(f"💾 儲存去雲端（{save_target}）", type="primary",
+                 use_container_width=True) and gs_client:
+        with st.spinner("儲存中..."):
+            result = save_sifu_meta(gs_client, save_target, no_bet_input, comment_input)
+        if result == "成功":
+            st.session_state.sifu_saved_snapshot = st.session_state.sifu_current_snapshot
+            st.success(f"已儲存 {save_target}！")
+        else:
+            st.error(f"❌ 儲存失敗: {result}")
+
+
+def sifu_image_ui(gs_client):
+    st.subheader("🎨 師妹刨馬法（出圖）")
+    st.caption("讀取分析師已經pick好同寫好評語嘅場次，一鍵出圖。")
+
+    race_to_draw = st.text_input("輸入場次（例如 R5）:", value="R1", key="sifu_draw_race")
+
+    if st.button("🖼️ 生成圖片", type="primary", use_container_width=True) and gs_client:
+        with st.spinner("讀取中..."):
+            df, warnings, msg = fetch_sifu_picks(gs_client, race_to_draw)
+        if df is None:
+            st.error(f"❌ {msg}")
+            for w in warnings:
+                st.warning(w)
+            return
+
+        for w in warnings:
+            st.warning(w)
+
+        no_bet, comment = fetch_sifu_meta(gs_client, race_to_draw)
+        if not comment:
+            st.warning("⚠️ 呢場仲未有師妹的話，張圖個評語區會空白。")
+
+        try:
+            result_img = draw_sifu_image(SIFU_TEMPLATE, df, no_bet, comment)
+        except FileNotFoundError as e:
+            st.error(f"❌ {e}")
+            return
+
+        buf = io.BytesIO()
+        result_img.save(buf, format="PNG")
+        byte_im = buf.getvalue()
+        st.image(byte_im, caption=f"{race_to_draw} 師妹刨馬法", use_container_width=True)
+        st.download_button("💾 下載圖片", data=byte_im,
+                           file_name=f"Sifu_{race_to_draw}.png", mime="image/png")
 
 
 def uk_scoring_ui(gs_client):
@@ -2023,9 +2527,9 @@ def aus_is_dirty():
 def aus_unsaved_banner():
     if aus_is_dirty():
         st.error(
-            f"⚠️ 你喺「澳洲（入分）」仲有未儲存嘅標記："
+            f"⚠️ 你喺「{PAGE_AUS_SCORE}」仲有未儲存嘅標記："
             f"**{st.session_state.get('aus_loaded_race')}**。\n\n"
-            f"揀返「🇦🇺 澳洲（入分）」就可以繼續，啲標記仲喺度。"
+            f"揀返「{PAGE_AUS_SCORE}」就可以繼續，啲標記仲喺度。"
         )
 
 
@@ -2220,22 +2724,47 @@ def aus_scoring_ui(gs_client):
 # 🎨 介面佈局
 # ==========================================
 st.title("🏇 Gold Racing 雲端自動化系統")
-system_mode = st.radio(
-    "請選擇你要使用嘅系統：",
-    ("🇬🇧 XX英國（出圖）", "🇬🇧 XX英國（入分）", "🇦🇺 澳洲（出圖）", "🇦🇺 澳洲（入分）", "📊 步速圖", "📢 賽日推介"),
-    horizontal=True
-)
+
+# ⚠️ 頁面名一律用呢啲常數，唔好喺下面散落咁打字串。
+#    未儲存警告係靠「而家喺邊一頁」判斷，一打錯字就會變成
+#    「喺英國入分頁面提你英國入分有嘢未儲存」。
+PAGE_UK_IMAGE = "🇬🇧 英國（出圖）"
+PAGE_UK_SCORE = "🇬🇧 英國（入分）"
+PAGE_AUS_IMAGE = "🇦🇺 澳洲（出圖）"
+PAGE_AUS_SCORE = "🇦🇺 澳洲（入分）"
+PAGE_PACE = "📊 步速圖"
+PAGE_INTRO = "📢 賽日推介"
+PAGE_SIFU_SCORE = "✍️ 師妹刨馬法（寫評語）"
+PAGE_SIFU_IMAGE = "🎨 師妹刨馬法（出圖）"
+
+LOCAL_PAGES = (PAGE_SIFU_SCORE, PAGE_SIFU_IMAGE, PAGE_PACE, PAGE_INTRO)
+OVERSEAS_PAGES = (PAGE_UK_SCORE, PAGE_UK_IMAGE, PAGE_AUS_SCORE, PAGE_AUS_IMAGE)
+
+region = st.radio("賽事類別：", ("🇭🇰 本地", "🌏 海外"), horizontal=True, key="region_select")
+if region == "🇭🇰 本地":
+    system_mode = st.radio("揀系統：", LOCAL_PAGES, horizontal=True, key="local_page")
+else:
+    system_mode = st.radio("揀系統：", OVERSEAS_PAGES, horizontal=True, key="overseas_page")
+
 st.divider()
 
 # 邊一頁有未儲存嘅嘢，就喺你而家所在嗰頁提醒你
-if system_mode != "🇬🇧 XX英國（入分）":
+if system_mode != PAGE_UK_SCORE:
     uk_unsaved_banner()
-if system_mode != "🇦🇺 澳洲（入分）":
+if system_mode != PAGE_AUS_SCORE:
     aus_unsaved_banner()
-if system_mode != "📊 步速圖":
+if system_mode != PAGE_PACE:
     pace_unsaved_banner()
+if system_mode != PAGE_SIFU_SCORE:
+    sifu_unsaved_banner()
 
-if system_mode == "🇬🇧 XX英國（出圖）":
+if system_mode == PAGE_SIFU_SCORE:
+    sifu_scoring_ui(gs_client)
+
+elif system_mode == PAGE_SIFU_IMAGE:
+    sifu_image_ui(gs_client)
+
+elif system_mode == PAGE_UK_IMAGE:
     st.subheader("🇬🇧 英國系統")
     st.caption("呢一頁只負責出圖。下載排位同入分喺「🇬🇧 XX英國（入分）」度做。")
 
@@ -2269,10 +2798,10 @@ if system_mode == "🇬🇧 XX英國（出圖）":
             else:
                 st.error(f"❌ 讀取失敗: {msg}。")
 
-elif system_mode == "🇬🇧 XX英國（入分）":
+elif system_mode == PAGE_UK_SCORE:
     uk_scoring_ui(gs_client)
 
-elif system_mode == "🇦🇺 澳洲（出圖）":
+elif system_mode == PAGE_AUS_IMAGE:
     st.subheader("🇦🇺 澳洲系統（出圖）")
     st.caption("呢一頁只負責出圖。下載排位同入分喺「🇦🇺 澳洲（入分）」度做。")
 
@@ -2307,12 +2836,12 @@ elif system_mode == "🇦🇺 澳洲（出圖）":
             except Exception as e:
                 st.error(f"讀取或生成圖片時發生錯誤: {e}")
 
-elif system_mode == "🇦🇺 澳洲（入分）":
+elif system_mode == PAGE_AUS_SCORE:
     aus_scoring_ui(gs_client)
 
-elif system_mode == "📊 步速圖":
+elif system_mode == PAGE_PACE:
     pace_map_ui(gs_client)
 
 
-elif system_mode == "📢 賽日推介":
+elif system_mode == PAGE_INTRO:
     race_day_intro_ui()
