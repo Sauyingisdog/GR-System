@@ -11,6 +11,8 @@ from PIL import Image, ImageDraw, ImageFont
 import gspread
 from google.oauth2.service_account import Credentials
 import json
+import zipfile
+import psycopg2
 
 # ==========================================
 # 🔒 系統登入密碼鎖
@@ -34,8 +36,6 @@ def check_password():
 if not check_password():
     st.stop()
 
-
-    
 # ==========================================
 # ⚙️ 基本設定與 Google 連線
 # ==========================================
@@ -1530,6 +1530,322 @@ def pace_map_ui(gs_client):
                 st.error(f"❌ 讀取失敗：{msg}")
 
 # ==========================================
+# 🗒️ 賽日備忘 核心函數
+# ==========================================
+# 全部資料由 Supabase 嚟，唔掂 Main Chart（3萬幾行，讀一次要等十幾秒）。
+# 前提：跑咗 04 prerace（今仗排位）同 02（同步）。
+#
+# 「上仗」= 同一隻馬 race_date < 今日 入面最新嗰一場。
+# 步速／偏差／轉彎 喺 02 嗰邊已經由 Trip 符號同 AN 欄顏色解析好，
+# 所以呢度淨係讀，唔使再parse。
+
+MEMO_TODAY_COLS = ["場", "號", "馬匹"]
+MEMO_LAST_COLS = ["名次", "總場", "班", "路程", "檔", "賠率",
+                  "步速", "偏差", "轉彎", "賽後"]
+
+# ── 條件格式 ──
+# ⚠️ 呢啲色碼要同 Main Chart 嗰邊嘅條件格式對得返。改一邊記住改另一邊。
+MEMO_PLACE_COLORS = {1: "#fe5858", 2: "#4a86e8", 3: "#34a853"}   # 名次1/2/3，反白字
+MEMO_CD_MATCH_FILL = "#ffe499"      # 上仗C&D同今仗一樣
+MEMO_DRAW_OUTSIDE_FILL = "#f4cccc"  # 檔 10-14
+MEMO_DRAW_INSIDE_FILL = "#b6d7a8"   # 檔 1-3
+MEMO_ODDS_COLORS = {"F": "#ff0000", "G": "#34a853", "B": "#e69138"}  # 反白粗體，F最大
+MEMO_INITIAL_FILL = "#fffaea"       # 初出馬成行
+MEMO_BAND_TODAY = "#000000"
+MEMO_BAND_LAST = "#38761d"
+
+
+def get_supabase_conn():
+    """Streamlit 連 Supabase。connection string 放喺 secrets 嘅 supabase_db_url。"""
+    url = st.secrets.get("supabase_db_url")
+    if not url:
+        raise RuntimeError(
+            "Secrets 入面搵唔到 supabase_db_url。\n"
+            "去 Streamlit Cloud → app → Settings → Secrets 加一行："
+            'supabase_db_url = "postgresql://..."'
+        )
+    return psycopg2.connect(url)
+
+
+def _memo_date_param(date_str):
+    """「2026/09/13」或者「2026-09-13」都收，轉做 Postgres 收得嘅格式"""
+    return str(date_str or "").strip().replace("/", "-")
+
+
+def fetch_memo_race_numbers(date_str):
+    """攞返嗰日有邊幾場（跟場次次序）"""
+    try:
+        conn = get_supabase_conn()
+    except Exception as e:
+        return [], str(e)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select distinct race_no from race_entries
+                where race_date = %s and race_no is not null and race_no <> ''
+                """,
+                (_memo_date_param(date_str),),
+            )
+            races = [r[0] for r in cur.fetchall()]
+    except Exception as e:
+        return [], str(e)
+    finally:
+        conn.close()
+
+    def race_sort_key(value):
+        digits = re.sub(r"\D", "", str(value))
+        return int(digits) if digits else 9999
+
+    return sorted(races, key=race_sort_key), "成功"
+
+
+def fetch_memo_rows(date_str, race_no):
+    """
+    回傳 (rows, msg)。每一行 = 一隻今仗出賽嘅馬 + 佢上仗嘅資料。
+    冇上仗（初出）嘅話 last 會係 None。
+    """
+    date_param = _memo_date_param(date_str)
+    try:
+        conn = get_supabase_conn()
+    except Exception as e:
+        return None, str(e)
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select race_no, horse_no, horse_name, horse_brand_no, track_code
+                from race_entries
+                where race_date = %s and race_no = %s
+                order by horse_no
+                """,
+                (date_param, race_no),
+            )
+            today_rows = cur.fetchall()
+
+            if not today_rows:
+                return None, f"Supabase 冇 {date_str} {race_no} 嘅資料。請確認跑咗 04 prerace 同 02。"
+
+            brand_nos = [r[3] for r in today_rows if r[3]]
+            last_by_horse = {}
+            if brand_nos:
+                cur.execute(
+                    """
+                    select distinct on (horse_brand_no)
+                        horse_brand_no, finish_position, meeting_no, race_class,
+                        track_code, draw, final_odds, odds_category,
+                        pace_judgement, post_race_deviation, corner_note, vet_note
+                    from race_entries
+                    where horse_brand_no = any(%s) and race_date < %s
+                    order by horse_brand_no, race_date desc
+                    """,
+                    (brand_nos, date_param),
+                )
+                for r in cur.fetchall():
+                    last_by_horse[r[0]] = {
+                        "名次": r[1], "總場": r[2], "班": r[3], "路程": r[4],
+                        "檔": r[5], "賠率": r[6], "_odds_cat": r[7],
+                        "步速": r[8], "偏差": r[9], "轉彎": r[10], "賽後": r[11],
+                    }
+    except Exception as e:
+        return None, str(e)
+    finally:
+        conn.close()
+
+    rows = []
+    for race_no_val, horse_no, horse_name, brand_no, today_track in today_rows:
+        rows.append({
+            "場": race_no_val,
+            "號": horse_no,
+            "馬匹": strip_brand_no(horse_name),
+            "_today_track": today_track,
+            "last": last_by_horse.get(brand_no),
+        })
+    return rows, "成功"
+
+
+def _hex_to_rgb(value):
+    v = str(value).lstrip("#")
+    return tuple(int(v[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def memo_place_style(value):
+    """名次 1/2/3（包括「1 平頭馬」）→ (底色, 反白)。其餘冇色。"""
+    m = re.match(r"^\s*(\d+)", str(value or ""))
+    if not m:
+        return None, False
+    fill = MEMO_PLACE_COLORS.get(int(m.group(1)))
+    return (fill, True) if fill else (None, False)
+
+
+def memo_draw_style(value):
+    """檔 1-3 → 淺綠；10-14 → 紅"""
+    try:
+        n = int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+    if 1 <= n <= 3:
+        return MEMO_DRAW_INSIDE_FILL
+    if 10 <= n <= 14:
+        return MEMO_DRAW_OUTSIDE_FILL
+    return None
+
+
+def memo_odds_style(odds_category):
+    """
+    賠率底色跟返 Main Chart 嘅「#」欄。
+    F 可以同 B 一齊出現（"F+B"），呢個時候 F 大過 B。
+    """
+    cat = str(odds_category or "")
+    for key in ("F", "G", "B"):      # 次序 = 優先次序
+        if key in cat:
+            return MEMO_ODDS_COLORS[key]
+    return None
+
+
+def draw_memo_image(rows, race_no, date_str=""):
+    """
+    畫一場嘅賽日備忘。冇底圖，畫布高度跟馬匹數目變。
+    所有尺寸集中喺 L，想調就改呢度。
+    """
+    L = {
+        # 加起嚟一定要等於畫布闊度（899）
+        #   偏差只會係「賺」／「蝕」一個字，轉彎最多三個字，所以收窄佢哋，
+        #   借位畀「賽後」—— 獸醫報告可以係「氣管有血 / 喘鳴」咁串幾個詞組。
+        "col_widths": [44, 40, 150,                                   # 場 號 馬匹
+                       52, 60, 44, 70, 44, 60, 76, 52, 64, 143],      # 上仗十欄
+        "band_h": 32,          # 「今仗資料 / 上仗備忘」嗰條
+        "header_h": 32,        # 欄名
+        "row_h": 37,
+        "font_size": 19,
+        "font_header": 18,
+        "font_band": 19,
+        "grid_color": "#b7b7b7",
+        "section_line_color": "#000000",
+        "pad": 6,
+    }
+
+    n_today = len(MEMO_TODAY_COLS)
+    widths = L["col_widths"]
+    table_w = sum(widths)
+    height = L["band_h"] + L["header_h"] + L["row_h"] * len(rows)
+
+    image = Image.new("RGB", (table_w, height), "white")
+    draw = ImageDraw.Draw(image)
+
+    font_file = "LXGWWenKaiTC-Bold.ttf"
+
+    def load_font(size):
+        try:
+            return ImageFont.truetype(font_file, size)
+        except Exception:
+            return ImageFont.load_default()
+
+    font_cell = load_font(L["font_size"])
+    font_head = load_font(L["font_header"])
+    font_band = load_font(L["font_band"])
+    _cache = {}
+
+    def fit_font(text, max_width, base_size):
+        """字太長自動縮細，唔好爆出隔離欄"""
+        size = base_size
+        while size > 10:
+            fnt = _cache.setdefault(size, load_font(size))
+            if fnt.getlength(str(text or "")) <= max_width:
+                return fnt
+            size -= 1
+        return _cache.setdefault(10, load_font(10))
+
+    def centered(text, font, x, width, top, height_):
+        bbox = font.getbbox(str(text) or "x")
+        tx = x + (width - font.getlength(str(text))) / 2
+        ty = top + (height_ - (bbox[3] - bbox[1])) / 2 - bbox[1]
+        return tx, ty
+
+    # ── 兩條分類帶 ──
+    today_w = sum(widths[:n_today])
+    draw.rectangle([0, 0, today_w, L["band_h"]], fill=MEMO_BAND_TODAY)
+    draw.rectangle([today_w, 0, table_w, L["band_h"]], fill=MEMO_BAND_LAST)
+    for text, x0, w in (("今仗資料", 0, today_w), ("上仗備忘", today_w, table_w - today_w)):
+        tx, ty = centered(text, font_band, x0, w, 0, L["band_h"])
+        draw.text((tx, ty), text, fill="white", font=font_band)
+
+    # ── 欄名 ──
+    y = L["band_h"]
+    headers = MEMO_TODAY_COLS + MEMO_LAST_COLS
+    cx = 0
+    for i, name in enumerate(headers):
+        draw.rectangle([cx, y, cx + widths[i], y + L["header_h"]],
+                       fill="white", outline=L["grid_color"])
+        tx, ty = centered(name, font_head, cx, widths[i], y, L["header_h"])
+        draw.text((tx, ty), name, fill="black", font=font_head)
+        cx += widths[i]
+    y += L["header_h"]
+
+    # ── 逐行 ──
+    for row in rows:
+        last = row.get("last")
+        is_initial = last is None
+        row_bg = MEMO_INITIAL_FILL if is_initial else "white"
+        draw.rectangle([0, y, table_w, y + L["row_h"]], fill=row_bg)
+
+        cells = []
+        for name in MEMO_TODAY_COLS:
+            cells.append((row.get(name), None, "black"))
+
+        if is_initial:
+            # 初出：成行米黃底，喺「名次」位寫「初出」，其餘留空
+            cells.append(("初出", None, "black"))
+            cells.extend([("", None, "black")] * (len(MEMO_LAST_COLS) - 1))
+        else:
+            place_fill, place_white = memo_place_style(last.get("名次"))
+            cells.append((last.get("名次"), place_fill, "white" if place_white else "black"))
+            cells.append((last.get("總場"), None, "black"))
+            cells.append((last.get("班"), None, "black"))
+
+            cd_fill = (MEMO_CD_MATCH_FILL
+                       if last.get("路程") and last.get("路程") == row.get("_today_track")
+                       else None)
+            cells.append((last.get("路程"), cd_fill, "black"))
+            cells.append((last.get("檔"), memo_draw_style(last.get("檔")), "black"))
+
+            odds_fill = memo_odds_style(last.get("_odds_cat"))
+            cells.append((last.get("賠率"), odds_fill, "white" if odds_fill else "black"))
+
+            for name in ("步速", "偏差", "轉彎", "賽後"):
+                value = last.get(name)
+                # 除咗「賺」用綠，其餘有內容嘅一律粉紅底黑字
+                if not value:
+                    cells.append(("", None, "black"))
+                elif str(value).strip() == "賺":
+                    cells.append((value, "#d9ead3", "black"))
+                else:
+                    cells.append((value, "#f4cccc", "black"))
+
+        cxx = 0
+        for i, (value, fill, colour) in enumerate(cells):
+            text = "" if value is None else str(value)
+            if fill:
+                draw.rectangle([cxx + 1, y + 1, cxx + widths[i] - 1, y + L["row_h"] - 1],
+                               fill=fill)
+            draw.rectangle([cxx, y, cxx + widths[i], y + L["row_h"]],
+                           outline=L["grid_color"])
+            if text:
+                fnt = fit_font(text, widths[i] - 2 * L["pad"], L["font_size"])
+                tx, ty = centered(text, fnt, cxx, widths[i], y, L["row_h"])
+                draw.text((tx, ty), text, fill=colour, font=fnt)
+            cxx += widths[i]
+        y += L["row_h"]
+
+    # 今仗 / 上仗 之間嗰條粗線
+    draw.line([today_w, 0, today_w, height], fill=L["section_line_color"], width=3)
+    draw.rectangle([0, 0, table_w - 1, height - 1], outline=L["section_line_color"])
+
+    return image
+
+
+# ==========================================
 # 🐴 師妹刨馬法 核心函數
 # ==========================================
 # 資料來源：05_master_pick.py 生成嗰張 Google Sheet 嘅 R1/R2/... tab。
@@ -2495,6 +2811,85 @@ def sifu_image_ui(gs_client):
                            file_name=f"Sifu_{race_to_draw}.png", mime="image/png")
 
 
+# ==========================================
+# 🗒️ 賽日備忘 介面
+# ==========================================
+def memo_ui():
+    st.subheader("🗒️ 賽日備忘")
+    st.caption("讀 Supabase 出圖，唔使分析師入任何嘢。"
+               "前提：嗰日已經跑咗 04 prerace 同 02 同步。")
+
+    if "memo_date_persist" not in st.session_state:
+        st.session_state.memo_date_persist = ""
+    date_str = st.text_input("賽事日期（例如 2026/09/13）:",
+                             value=st.session_state.memo_date_persist,
+                             key="memo_date_input")
+    st.session_state.memo_date_persist = date_str
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        one_race = st.text_input("單場（例如 R5，留空 = 全日）:", key="memo_single_race")
+    with col_b:
+        st.write("")
+        go = st.button("🖼️ 生成", type="primary", use_container_width=True)
+
+    if not go:
+        return
+    if not date_str.strip():
+        st.error("❌ 請先輸入日期。")
+        return
+
+    with st.spinner("讀取中..."):
+        if one_race.strip():
+            race_list, msg = [one_race.strip().upper()], "成功"
+        else:
+            race_list, msg = fetch_memo_race_numbers(date_str)
+
+    if not race_list:
+        st.error(f"❌ 搵唔到場次：{msg}")
+        return
+
+    st.success(f"搵到 {len(race_list)} 場：{'、'.join(race_list)}")
+
+    images = {}
+    for race_no in race_list:
+        rows, msg = fetch_memo_rows(date_str, race_no)
+        if rows is None:
+            st.warning(f"⚠️ {race_no}：{msg}")
+            continue
+
+        n_initial = sum(1 for r in rows if r.get("last") is None)
+        try:
+            img = draw_memo_image(rows, race_no, date_str)
+        except Exception as e:
+            st.error(f"❌ {race_no} 出圖失敗：{e}")
+            continue
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        images[race_no] = buf.getvalue()
+
+        caption = f"{date_str} {race_no}　{len(rows)} 隻馬"
+        if n_initial:
+            caption += f"（其中 {n_initial} 隻初出）"
+        st.image(images[race_no], caption=caption, use_container_width=False)
+        st.download_button(f"💾 下載 {race_no}", data=images[race_no],
+                           file_name=f"Memo_{date_str.replace('/', '')}_{race_no}.png",
+                           mime="image/png", key=f"memo_dl_{race_no}")
+        st.divider()
+
+    if len(images) > 1:
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for race_no, data in images.items():
+                zf.writestr(f"Memo_{date_str.replace('/', '')}_{race_no}.png", data)
+        st.download_button(f"📦 一次過下載全部 {len(images)} 張",
+                           data=zip_buf.getvalue(),
+                           file_name=f"Memo_{date_str.replace('/', '')}.zip",
+                           mime="application/zip", type="primary",
+                           use_container_width=True)
+
+
 def uk_scoring_ui(gs_client):
     st.subheader("✍️ 英國賽事入分（分析師用）")
     show_flash()
@@ -2909,8 +3304,9 @@ PAGE_PACE = "📊 步速圖"
 PAGE_INTRO = "📢 賽日推介"
 PAGE_SIFU_SCORE = "✍️ 師妹刨馬法（寫評語）"
 PAGE_SIFU_IMAGE = "🎨 師妹刨馬法（出圖）"
+PAGE_MEMO = "🗒️ 賽日備忘"
 
-LOCAL_PAGES = (PAGE_SIFU_SCORE, PAGE_SIFU_IMAGE, PAGE_PACE, PAGE_INTRO)
+LOCAL_PAGES = (PAGE_SIFU_SCORE, PAGE_SIFU_IMAGE, PAGE_MEMO, PAGE_PACE, PAGE_INTRO)
 OVERSEAS_PAGES = (PAGE_UK_SCORE, PAGE_UK_IMAGE, PAGE_AUS_SCORE, PAGE_AUS_IMAGE)
 
 region = st.radio("賽事類別：", ("🇭🇰 本地", "🌏 海外"), horizontal=True, key="region_select")
@@ -3011,6 +3407,9 @@ elif system_mode == PAGE_AUS_IMAGE:
 
 elif system_mode == PAGE_AUS_SCORE:
     aus_scoring_ui(gs_client)
+
+elif system_mode == PAGE_MEMO:
+    memo_ui()
 
 elif system_mode == PAGE_PACE:
     pace_map_ui(gs_client)
