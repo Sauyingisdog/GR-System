@@ -63,6 +63,26 @@ def clean_rating(rating_str):
     num = re.sub(r'\D', '', str(rating_str))
     return int(num) if num else 0
 
+def normalize_no_bet(value):
+    """
+    No Bet 指數統一只存一個數字。
+    分母永遠係10，所以冇必要叫人每次都打「/10」。
+    舊資料存咗做「8/10」，讀返嚟一律剝返個數字出嚟，新舊都食得。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "/" in text:
+        text = text.split("/")[0].strip()
+    return text
+
+
+def format_no_bet_for_image(value):
+    """出圖嗰陣先補返「/10」"""
+    num = normalize_no_bet(value)
+    return f"{num}/10" if num else ""
+
+
 def clean_jockey_name(jockey_str):
     # 移除括號註記，例如 (a), (-3), (-5) 等見習/減磅標記
     cleaned = re.sub(r'\([^)]*\)', '', str(jockey_str))
@@ -168,7 +188,7 @@ def calculate_uk_scores(df):
     return df_sorted
 
 # ==========================================
-# 🇬🇧 英國/本地系統核心函數
+# 🇬🇧 英國系統核心函數
 # ==========================================
 def fetch_and_push_uk(date_str, client):
     url = f"https://racing.hkjc.com/Racing/Info/MCS/Chinese/racing/prerace/dstr/{date_str}_S20000_S_DSTR.xml.zip"
@@ -379,7 +399,8 @@ def draw_uk_image(template_path, df_data, race_title, no_bet_text, comment_text,
 
     # 🌟 邏輯分流：白金舍出 No Bet 指數，金舍留白
     if tier == "platinum":
-        draw.text((55, 1010), no_bet_text, fill="black", font=font_no_bet)
+        # 存落Sheet淨係一個數字，出圖先補返「/10」
+        draw.text((55, 1010), format_no_bet_for_image(no_bet_text), fill="black", font=font_no_bet)
 
     # 🌟 邏輯分流：畫評語區
     margin_x, margin_y = 254, 996
@@ -808,6 +829,10 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
     num_box = (21 * scale_x, 25.4 * scale_y, 145.15 * scale_x, 27.63 * scale_y)
     name_box = (5.92 * scale_x, 68.89 * scale_y, 145.15 * scale_x, 27.63 * scale_y)
 
+    # 馬名喺個白框入面睇落偏低，向上褪。
+    # 負數 = 向上，正數 = 向落。想再微調就改呢一個數。
+    NAME_Y_OFFSET = -2
+
     for _, horse in df.iterrows():
         row = float(horse["Row"])
         col = float(horse["Col"])
@@ -846,7 +871,7 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
         nm_x, nm_y, nm_w, nm_h = name_box
         name_text_w = font_name.getlength(name)
         name_x = px + nm_x + (nm_w - name_text_w) / 2
-        name_y = py + nm_y + (nm_h - 24) / 2
+        name_y = py + nm_y + (nm_h - 24) / 2 + NAME_Y_OFFSET
         draw.text((name_x, name_y), name, fill="black", font=font_name)
 
     return image
@@ -1752,6 +1777,21 @@ def uk_do_load(gs_client, race_num):
     return True
 
 
+def uk_reset_scoring_state():
+    """
+    清走英國入分嘅所有in-memory狀態。
+    下載新排位之後一定要做：嗰下會 worksheet.clear() 再重寫，
+    雲端啲預計評分／No Bet／徒弟的話已經冇咗，
+    但畫面同 session_state 仲揸住舊嗰場嘅嘢，唔清就會夾硬寫返上去。
+    """
+    for k in ("scoring_df", "scoring_no_bet", "scoring_comment",
+              "uk_loaded_race", "uk_saved_snapshot", "uk_current_snapshot",
+              "uk_pending_load",
+              "scoring_editor", "scoring_no_bet_input", "scoring_comment_input",
+              "scoring_is_handicap"):
+        st.session_state.pop(k, None)
+
+
 def uk_scoring_ui(gs_client):
     st.subheader("✍️ 英國賽事入分（分析師用）")
 
@@ -1764,8 +1804,13 @@ def uk_scoring_ui(gs_client):
         if st.button("🔄 下載並寫入雲端", use_container_width=True, key="scoring_fetch_btn") and gs_client:
             with st.spinner("寫入中，請稍候..."):
                 msg = fetch_and_push_uk(date_input_scoring, gs_client)
-                if "成功" in msg: st.success(msg)
-                else: st.error(msg)
+            if "成功" in msg:
+                # 雲端已經重寫晒，畫面上嗰啲舊分／No Bet／徒弟的話全部作廢
+                uk_reset_scoring_state()
+                st.success(msg + "（已經清走畫面上嘅舊入分資料）")
+                st.rerun()
+            else:
+                st.error(msg)
 
     st.divider()
 
@@ -1854,10 +1899,11 @@ def uk_scoring_ui(gs_client):
         st.divider()
 
         no_bet_input = st.text_input(
-            "No Bet 指數 (例如 10/10):",
-            value=st.session_state.get("scoring_no_bet", ""),
+            "No Bet 指數（只填數字就得，例如 8；出圖會自動變成 8/10）:",
+            value=normalize_no_bet(st.session_state.get("scoring_no_bet", "")),
             key="scoring_no_bet_input"
         )
+        no_bet_input = normalize_no_bet(no_bet_input)
         comment_input = st.text_area(
             "徒弟的話:",
             value=st.session_state.get("scoring_comment", ""),
@@ -1954,6 +2000,18 @@ def aus_do_load(gs_client, race_num):
     return True
 
 
+def aus_reset_scoring_state():
+    """下載新排位之後清走澳洲入分嘅in-memory狀態，理由同英國一樣"""
+    race = st.session_state.get("aus_loaded_race")
+    for k in ("aus_scoring_df", "aus_scoring_page", "aus_loaded_race",
+              "aus_saved_snapshot", "aus_current_snapshot", "aus_pending_load"):
+        st.session_state.pop(k, None)
+    if race:
+        for k in [k for k in list(st.session_state.keys())
+                  if isinstance(k, str) and k.startswith(f"aus_field_{race}_")]:
+            st.session_state.pop(k, None)
+
+
 def aus_scoring_ui(gs_client):
     st.subheader("✍️ 澳洲Form Guide入分（分析師用）")
 
@@ -1966,8 +2024,12 @@ def aus_scoring_ui(gs_client):
         if st.button("🔄 下載並寫入雲端", use_container_width=True, key="aus_scoring_fetch_btn") and gs_client:
             with st.spinner("寫入中，請稍候..."):
                 msg = fetch_and_push_aus(date_input_aus_scoring, gs_client)
-                if "成功" in msg: st.success(msg)
-                else: st.error(msg)
+            if "成功" in msg:
+                aus_reset_scoring_state()
+                st.success(msg + "（已經清走畫面上嘅舊標記）")
+                st.rerun()
+            else:
+                st.error(msg)
 
     st.divider()
 
@@ -2121,21 +2183,10 @@ if system_mode != "📊 步速圖":
     pace_unsaved_banner()
 
 if system_mode == "🇬🇧 XX英國（出圖）":
-    st.subheader("🇬🇧 英國/本地系統")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        date_input = st.text_input("1. 輸入賽事日期 (例如 20260819):", value="20260819")
-    with col2:
-        st.write("")
-        st.write("")
-        if st.button("🔄 下載並寫入雲端", use_container_width=True) and gs_client:
-            with st.spinner("寫入中，請稍候..."):
-                msg = fetch_and_push_uk(date_input, gs_client)
-                if "成功" in msg: st.success(msg)
-                else: st.error(msg)
+    st.subheader("🇬🇧 英國系統")
+    st.caption("呢一頁只負責出圖。下載排位同入分喺「🇬🇧 XX英國（入分）」度做。")
 
-    st.write("2. 雲端讀取並出圖")
-    race_to_fetch = st.text_input("輸入要處理嘅場次 (海外請打 S1-1，本地請打 R1):", value="S1-1")
+    race_to_fetch = st.text_input("輸入要處理嘅場次 (例如 S1-1):", value="S1-1")
 
     # 🌟 雙按鈕設計：一鍵分離白金舍與金舍
     col_btn1, col_btn2 = st.columns(2)
@@ -2161,7 +2212,7 @@ if system_mode == "🇬🇧 XX英國（出圖）":
 
                     file_suffix = "Platinum" if tier_mode == "platinum" else "Gold"
                     st.image(byte_im, caption=f"{race_to_fetch} 預覽 ({file_suffix})", use_container_width=True)
-                    st.download_button(label=f"💾 下載 PNG 圖片 ({file_suffix})", data=byte_im, file_name=f"GoldRacing_UK_{date_input}_{race_to_fetch}_{file_suffix}.png", mime="image/png")
+                    st.download_button(label=f"💾 下載 PNG 圖片 ({file_suffix})", data=byte_im, file_name=f"GoldRacing_UK_{race_to_fetch}_{file_suffix}.png", mime="image/png")
             else:
                 st.error(f"❌ 讀取失敗: {msg}。")
 
@@ -2170,19 +2221,8 @@ elif system_mode == "🇬🇧 XX英國（入分）":
 
 elif system_mode == "🇦🇺 澳洲（出圖）":
     st.subheader("🇦🇺 澳洲系統（出圖）")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        date_input_aus = st.text_input("1. 輸入海外賽事日期:", value="20260820", key="aus_date")
-    with col2:
-        st.write("")
-        st.write("")
-        if st.button("🔄 下載澳洲排位", use_container_width=True) and gs_client:
-            with st.spinner("抓取海外資料中..."):
-                msg = fetch_and_push_aus(date_input_aus, gs_client)
-                if "成功" in msg: st.success(msg)
-                else: st.error(msg)
+    st.caption("呢一頁只負責出圖。下載排位同入分喺「🇦🇺 澳洲（入分）」度做。")
 
-    st.write("2. 雲端讀取並出圖")
     race_to_fetch_aus = st.text_input("輸入要處理嘅場次 (例如 S1-2):", value="S1-2")
     if st.button("📥 生成澳洲 Form Guide 圖片", type="primary") and gs_client:
         with st.spinner("出圖中..."):
