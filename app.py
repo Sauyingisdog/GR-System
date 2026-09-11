@@ -831,7 +831,7 @@ def draw_pace_map(df, race_name, pace_desc, track_type,
 
     # 馬名喺個白框入面睇落偏低，向上褪。
     # 負數 = 向上，正數 = 向落。想再微調就改呢一個數。
-    NAME_Y_OFFSET = -1
+    NAME_Y_OFFSET = -0.5
 
     for _, horse in df.iterrows():
         row = float(horse["Row"])
