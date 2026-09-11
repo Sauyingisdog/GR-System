@@ -33,7 +33,7 @@ def check_password():
 
 if not check_password():
     st.stop()
-           
+
 # ==========================================
 # ⚙️ 基本設定與 Google 連線
 # ==========================================
@@ -1236,6 +1236,57 @@ def draw_aus_image(template_path, df_data):
 
     return image.convert("RGB")
 
+# ==========================================
+# 🛡️ 步速圖：未儲存保護
+# ==========================================
+def pace_snapshot(grid_df, earn, lost, change, pace_desc, track_type):
+    if grid_df is None:
+        return None
+    try:
+        grid = tuple(tuple(str(v) for v in row) for row in grid_df.values.tolist())
+    except Exception:
+        return None
+    return (grid, str(earn or ""), str(lost or ""), str(change or ""),
+            str(pace_desc or ""), str(track_type or ""))
+
+
+def pace_is_dirty():
+    if st.session_state.get("pace_loaded_race") is None:
+        return False
+    return st.session_state.get("pace_current_snapshot") != st.session_state.get("pace_saved_snapshot")
+
+
+def pace_unsaved_banner():
+    if pace_is_dirty():
+        st.error(
+            f"⚠️ 你喺「步速圖」仲有未儲存嘅排位："
+            f"**{st.session_state.get('pace_loaded_race')}**。\n\n"
+            f"揀返「📊 步速圖」就可以繼續，個 grid 仲喺度。"
+        )
+
+
+def pace_do_load(gs_client, race_name):
+    horses_df, msg = fetch_pace_raw_from_gsheet(gs_client, race_name)
+    if horses_df is None:
+        st.error(f"❌ 讀取失敗：{msg}")
+        return False
+    grid_df = init_grid_by_draw(horses_df, num_cols=8, num_rows=4)
+    st.session_state.pace_horses_df = horses_df
+    st.session_state.pace_grid_df = grid_df
+    st.session_state.pace_loaded_race = race_name
+    # 新一場，清走上一場留低嘅標記同editor狀態
+    for k in ("pace_earn_horses", "pace_lost_horses", "pace_change_horses",
+              "pace_grid_editor", "pace_earn_input", "pace_lost_input", "pace_change_input"):
+        st.session_state.pop(k, None)
+    snap = pace_snapshot(grid_df, "", "", "",
+                         st.session_state.get("pace_desc", ""),
+                         st.session_state.get("pace_track_type", ""))
+    st.session_state.pace_saved_snapshot = snap
+    st.session_state.pace_current_snapshot = snap
+    st.success(f"已讀取 {race_name} 嘅 {len(horses_df)} 匹馬，並按檔位初始排位。")
+    return True
+
+
 def pace_map_ui(gs_client):
     st.subheader("📊 步速圖系統")
 
@@ -1253,18 +1304,58 @@ def pace_map_ui(gs_client):
 
         st.divider()
 
-        race_name = st.text_input("場次", value="R6", key="pace_race_name")
+        # 場次輸入框用非widget嘅key記住，切去第二個系統再返嚟都唔會跳返 R6
+        if "pace_race_name_persist" not in st.session_state:
+            st.session_state.pace_race_name_persist = "R6"
+        race_name = st.text_input("場次",
+                                  value=st.session_state.pace_race_name_persist,
+                                  key="pace_race_name")
+        st.session_state.pace_race_name_persist = race_name
+
         pace_desc = st.text_input("預計步速", value="中等偏快", key="pace_desc")
         track_type = st.radio("賽道類型", ["彎道", "直路"], horizontal=True, key="pace_track_type")
 
+        pace_loaded = st.session_state.get("pace_loaded_race")
+
         if st.button("📥 讀取呢場嘅馬號/檔位並初始化排位", use_container_width=True) and gs_client:
-            horses_df, msg = fetch_pace_raw_from_gsheet(gs_client, race_name)
-            if horses_df is not None:
-                st.session_state.pace_horses_df = horses_df
-                st.session_state.pace_grid_df = init_grid_by_draw(horses_df, num_cols=8, num_rows=4)
-                st.success(f"已讀取 {race_name} 嘅 {len(horses_df)} 匹馬，並按檔位初始排位。")
+            if pace_is_dirty() and race_name != pace_loaded:
+                st.session_state.pace_pending_load = race_name
             else:
-                st.error(f"❌ 讀取失敗：{msg}")
+                pace_do_load(gs_client, race_name)
+                st.rerun()
+
+        pace_pending = st.session_state.get("pace_pending_load")
+        if pace_pending:
+            st.error(
+                f"⚠️ **{pace_loaded}** 嘅排位仲未儲存。\n\n"
+                f"而家讀取 **{pace_pending}** 會重新初始化個 grid，"
+                f"{pace_loaded} 嗰啲手排位置會即刻冇咗，救唔返。"
+            )
+            pc1, pc2, pc3 = st.columns(3)
+            with pc1:
+                if st.button(f"💾 先儲存返 {pace_loaded}", type="primary", use_container_width=True):
+                    push_pace_grid_to_gsheet(
+                        gs_client, pace_loaded, pace_desc, track_type,
+                        st.session_state.pace_grid_df,
+                        earn_horses=st.session_state.get("pace_earn_horses", ""),
+                        lost_horses=st.session_state.get("pace_lost_horses", ""),
+                        change_horses=st.session_state.get("pace_change_horses", "")
+                    )
+                    st.session_state.pace_saved_snapshot = st.session_state.get("pace_current_snapshot")
+                    st.session_state.pop("pace_pending_load", None)
+                    pace_do_load(gs_client, pace_pending)
+                    st.rerun()
+            with pc2:
+                if st.button("🗑️ 唔要嗰個排位，照讀", use_container_width=True):
+                    st.session_state.pop("pace_pending_load", None)
+                    pace_do_load(gs_client, pace_pending)
+                    st.rerun()
+            with pc3:
+                if st.button("↩️ 取消", use_container_width=True):
+                    st.session_state.pop("pace_pending_load", None)
+                    st.session_state.pace_race_name_persist = pace_loaded
+                    st.rerun()
+            st.divider()
 
         if "pace_grid_df" in st.session_state:
             st.write("**排位 Grid**（輸入馬號，可加 `^`=向上半格 或 `>`=向右半格，例如 `11^`）")
@@ -1299,6 +1390,29 @@ def pace_map_ui(gs_client):
             st.session_state.pace_lost_horses = lost_horses_input
             st.session_state.pace_change_horses = change_horses_input
 
+            # 記低而家個狀態，用嚟同「上次儲存」比較
+            st.session_state.pace_current_snapshot = pace_snapshot(
+                st.session_state.pace_grid_df,
+                st.session_state.get("pace_earn_horses", ""),
+                st.session_state.get("pace_lost_horses", ""),
+                st.session_state.get("pace_change_horses", ""),
+                pace_desc, track_type
+            )
+
+            # ⚠️ 儲存目標跟返「個grid由邊場讀返嚟」，唔跟輸入框。
+            #    輸入框會因為切換頁面而跳返預設值，亦會因為你打算讀下一場而被改咗。
+            pace_save_target = st.session_state.get("pace_loaded_race") or race_name
+
+            if pace_save_target != race_name:
+                st.warning(
+                    f"⚠️ 你而家排緊嘅係 **{pace_save_target}**，但上面個場次寫住 **{race_name}**。\n\n"
+                    f"撳儲存只會寫入 **{pace_save_target}**。"
+                )
+            if pace_is_dirty():
+                st.info(f"📝 **{pace_save_target}** 有未儲存嘅排位")
+            else:
+                st.caption(f"✅ {pace_save_target} 已經同雲端一致")
+
             col_a, col_b = st.columns(2)
             with col_a:
                 if st.button("👀 即時預覽", use_container_width=True):
@@ -1321,19 +1435,21 @@ def pace_map_ui(gs_client):
                         for c in conflicts:
                             st.warning(c)
 
-                    preview_img = draw_pace_map(horse_list, race_name, pace_desc, track_type)
+                    preview_img = draw_pace_map(horse_list, pace_save_target, pace_desc, track_type)
                     st.image(preview_img, use_container_width=True)
 
             with col_b:
-                if st.button("💾 儲存去雲端（俾出圖用）", use_container_width=True) and gs_client:
+                if st.button(f"💾 儲存去雲端（{pace_save_target}）",
+                             use_container_width=True) and gs_client:
                     push_pace_grid_to_gsheet(
-                        gs_client, race_name, pace_desc, track_type,
+                        gs_client, pace_save_target, pace_desc, track_type,
                         st.session_state.pace_grid_df,
                         earn_horses=st.session_state.get("pace_earn_horses", ""),
                         lost_horses=st.session_state.get("pace_lost_horses", ""),
                         change_horses=st.session_state.get("pace_change_horses", "")
                     )
-                    st.success(f"已儲存 {race_name} 嘅排位資料！")
+                    st.session_state.pace_saved_snapshot = st.session_state.get("pace_current_snapshot")
+                    st.success(f"已儲存 {pace_save_target} 嘅排位資料！")
 
     with tab2:
         race_to_load = st.text_input("輸入場次", value="R6", key="pace_load_race")
@@ -1573,6 +1689,69 @@ def race_day_intro_ui():
             mime="image/png"
         )
 
+# ==========================================
+# 🛡️ 英國入分：未儲存保護
+# ==========================================
+# 兩個真實會出事嘅情境：
+#   (a) 撳去第二個系統再撳返嚟，場次輸入框會自動跳返預設嘅 "S1-1"
+#       （Streamlit 唔會保留冇render過嘅widget狀態），
+#       跟住撳儲存就會將 S1-3 嘅分寫入 S1-1。
+#   (b) 改完分未儲存，順手改咗場次準備讀下一場，先記起未save，
+#       跟住唔記得改返場次就撳儲存，一樣寫錯場。
+#
+# 根本解法：儲存嘅目標跟返「份資料由邊場讀返嚟」，唔跟輸入框。
+# 兩個警告係額外嘅保險。
+
+def uk_snapshot(df, no_bet, comment):
+    """將而家啲內容濃縮成一個可以比較嘅值，用嚟判斷有冇改動過"""
+    if df is None:
+        return None
+    try:
+        ratings = list(df['預計評分'].astype(str))
+        handicap = str(df['是否讓磅'].iloc[0]) if len(df) > 0 else ""
+    except Exception:
+        return None
+    return (ratings, handicap, str(no_bet or ""), str(comment or ""))
+
+
+def uk_is_dirty():
+    """有冇未儲存嘅改動"""
+    if st.session_state.get("uk_loaded_race") is None:
+        return False
+    return st.session_state.get("uk_current_snapshot") != st.session_state.get("uk_saved_snapshot")
+
+
+def uk_unsaved_banner():
+    """喺其他頁面頂部提醒：英國入分仲有嘢未儲存"""
+    if uk_is_dirty():
+        st.error(
+            f"⚠️ 你喺「英國（入分）」仲有未儲存嘅改動："
+            f"**{st.session_state.get('uk_loaded_race')}**。\n\n"
+            f"揀返「🇬🇧 XX英國（入分）」就可以繼續，啲改動仲喺度。"
+        )
+
+
+def uk_do_load(gs_client, race_num):
+    with st.spinner("讀取中..."):
+        df, no_bet_val, comment_val, msg = fetch_uk_raw_data(gs_client, race_num)
+    if df is None:
+        st.error(f"❌ {msg}")
+        return False
+    st.session_state.scoring_df = df
+    st.session_state.scoring_no_bet = no_bet_val
+    st.session_state.scoring_comment = comment_val
+    st.session_state.uk_loaded_race = race_num
+    snap = uk_snapshot(df, no_bet_val, comment_val)
+    st.session_state.uk_saved_snapshot = snap
+    st.session_state.uk_current_snapshot = snap
+    # 讀新一場，要清走舊嗰場留低嘅editor狀態
+    for k in ("scoring_editor", "scoring_no_bet_input", "scoring_comment_input",
+              "scoring_is_handicap"):
+        st.session_state.pop(k, None)
+    st.success(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
+    return True
+
+
 def uk_scoring_ui(gs_client):
     st.subheader("✍️ 英國賽事入分（分析師用）")
 
@@ -1590,18 +1769,59 @@ def uk_scoring_ui(gs_client):
 
     st.divider()
 
-    race_num = st.text_input("2. 場次 (例如 S1-1):", value="S1-1", key="scoring_race_num")
+    # 場次輸入框：用一個非widget嘅key記住，咁切換去第二個系統再返嚟都唔會跳返 S1-1
+    if "uk_race_num_persist" not in st.session_state:
+        st.session_state.uk_race_num_persist = "S1-1"
+    race_num = st.text_input("2. 場次 (例如 S1-1):",
+                             value=st.session_state.uk_race_num_persist,
+                             key="scoring_race_num")
+    st.session_state.uk_race_num_persist = race_num
 
-    if st.button("📥 讀取呢場資料（首次填會自動起步，續做會讀返之前進度）", use_container_width=True) and gs_client:
-        with st.spinner("讀取中..."):
-            df, no_bet_val, comment_val, msg = fetch_uk_raw_data(gs_client, race_num)
-        if df is not None:
-            st.session_state.scoring_df = df
-            st.session_state.scoring_no_bet = no_bet_val
-            st.session_state.scoring_comment = comment_val
-            st.success(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
+    loaded_race = st.session_state.get("uk_loaded_race")
+
+    if st.button("📥 讀取呢場資料（首次填會自動起步，續做會讀返之前進度）",
+                 use_container_width=True) and gs_client:
+        if uk_is_dirty() and race_num != loaded_race:
+            st.session_state.uk_pending_load = race_num
         else:
-            st.error(f"❌ {msg}")
+            uk_do_load(gs_client, race_num)
+            st.rerun()
+
+    # ── 警告二：未儲存就想讀第二場 ──
+    pending = st.session_state.get("uk_pending_load")
+    if pending:
+        st.error(
+            f"⚠️ **{loaded_race}** 仲有未儲存嘅改動。\n\n"
+            f"而家讀取 **{pending}**，{loaded_race} 嗰啲分會即刻冇咗，救唔返。"
+        )
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button(f"💾 先儲存返 {loaded_race}", type="primary", use_container_width=True):
+                with st.spinner("儲存中..."):
+                    result = save_uk_scoring_progress(
+                        gs_client, loaded_race,
+                        st.session_state.scoring_df,
+                        st.session_state.get("scoring_no_bet_input", ""),
+                        st.session_state.get("scoring_comment_input", ""),
+                    )
+                if result == "成功":
+                    st.session_state.uk_saved_snapshot = st.session_state.get("uk_current_snapshot")
+                    st.session_state.pop("uk_pending_load", None)
+                    uk_do_load(gs_client, pending)
+                    st.rerun()
+                else:
+                    st.error(f"❌ 儲存失敗，冇讀取新一場: {result}")
+        with c2:
+            if st.button("🗑️ 唔要嗰啲改動，照讀", use_container_width=True):
+                st.session_state.pop("uk_pending_load", None)
+                uk_do_load(gs_client, pending)
+                st.rerun()
+        with c3:
+            if st.button("↩️ 取消", use_container_width=True):
+                st.session_state.pop("uk_pending_load", None)
+                st.session_state.uk_race_num_persist = loaded_race
+                st.rerun()
+        st.divider()
 
     if "scoring_df" in st.session_state:
         current_handicap_val = st.session_state.scoring_df['是否讓磅'].iloc[0] if len(st.session_state.scoring_df) > 0 else "FALSE"
@@ -1645,17 +1865,94 @@ def uk_scoring_ui(gs_client):
             height=150
         )
 
-        if st.button("💾 儲存去雲端", type="primary", use_container_width=True) and gs_client:
+        # 每次rerun都記低而家嘅內容，用嚟同「上次儲存」比較
+        st.session_state.uk_current_snapshot = uk_snapshot(
+            st.session_state.scoring_df, no_bet_input, comment_input
+        )
+
+        save_target = st.session_state.get("uk_loaded_race") or race_num
+
+        # 輸入框同實際資料唔同場，要講到明
+        if save_target != race_num:
+            st.warning(
+                f"⚠️ 你而家編輯緊嘅係 **{save_target}**，但上面個場次輸入框寫住 **{race_num}**。\n\n"
+                f"撳儲存只會寫入 **{save_target}**（即係啲分本身嘅出處），唔會寫入 {race_num}。"
+            )
+
+        if uk_is_dirty():
+            st.info(f"📝 **{save_target}** 有未儲存嘅改動")
+        else:
+            st.caption(f"✅ {save_target} 已經同雲端一致")
+
+        # ⚠️ 一定要用 save_target 而唔係 race_num：
+        #    race_num 係輸入框嘅即時值，會因為切換頁面而跳返預設值，
+        #    亦會因為你打算讀下一場而被改咗。用佢就會寫錯場。
+        if st.button(f"💾 儲存去雲端（{save_target}）", type="primary",
+                     use_container_width=True) and gs_client:
             with st.spinner("儲存中..."):
                 result = save_uk_scoring_progress(
-                    gs_client, race_num,
+                    gs_client, save_target,
                     st.session_state.scoring_df,
                     no_bet_input, comment_input
                 )
             if result == "成功":
-                st.success(f"已儲存 {race_num} 嘅入分進度！")
+                st.session_state.uk_saved_snapshot = st.session_state.uk_current_snapshot
+                st.success(f"已儲存 {save_target} 嘅入分進度！")
             else:
                 st.error(f"❌ 儲存失敗: {result}")
+
+# ==========================================
+# 🛡️ 澳洲入分：未儲存保護
+# ==========================================
+def aus_snapshot(df):
+    if df is None:
+        return None
+    try:
+        return tuple(
+            tuple(str(df.at[i, fld]) for fld in AUS_EDITABLE_FIELDS if fld in df.columns)
+            for i in df.index
+        )
+    except Exception:
+        return None
+
+
+def aus_is_dirty():
+    if st.session_state.get("aus_loaded_race") is None:
+        return False
+    return st.session_state.get("aus_current_snapshot") != st.session_state.get("aus_saved_snapshot")
+
+
+def aus_unsaved_banner():
+    if aus_is_dirty():
+        st.error(
+            f"⚠️ 你喺「澳洲（入分）」仲有未儲存嘅標記："
+            f"**{st.session_state.get('aus_loaded_race')}**。\n\n"
+            f"揀返「🇦🇺 澳洲（入分）」就可以繼續，啲標記仲喺度。"
+        )
+
+
+def aus_do_load(gs_client, race_num):
+    with st.spinner("讀取中..."):
+        df, msg = fetch_aus_raw_data(gs_client, race_num)
+    if df is None:
+        st.error(f"❌ {msg}")
+        return False
+
+    # ⚠️ 啲selectbox嘅key入面有race_num，如果重讀同一場，
+    #    舊嘅widget狀態會蓋過由Sheet讀返嚟嘅值。所以要清走。
+    for k in [k for k in list(st.session_state.keys())
+              if isinstance(k, str) and k.startswith(f"aus_field_{race_num}_")]:
+        st.session_state.pop(k, None)
+
+    st.session_state.aus_scoring_df = df
+    st.session_state.aus_scoring_page = 0
+    st.session_state.aus_loaded_race = race_num
+    snap = aus_snapshot(df)
+    st.session_state.aus_saved_snapshot = snap
+    st.session_state.aus_current_snapshot = snap
+    st.success(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
+    return True
+
 
 def aus_scoring_ui(gs_client):
     st.subheader("✍️ 澳洲Form Guide入分（分析師用）")
@@ -1674,17 +1971,52 @@ def aus_scoring_ui(gs_client):
 
     st.divider()
 
-    race_num = st.text_input("2. 場次 (例如 S1-2):", value="S1-2", key="aus_scoring_race_num")
+    if "aus_race_num_persist" not in st.session_state:
+        st.session_state.aus_race_num_persist = "S1-2"
+    race_num = st.text_input("2. 場次 (例如 S1-2):",
+                             value=st.session_state.aus_race_num_persist,
+                             key="aus_scoring_race_num")
+    st.session_state.aus_race_num_persist = race_num
+
+    aus_loaded = st.session_state.get("aus_loaded_race")
 
     if st.button("📥 讀取呢場資料", use_container_width=True) and gs_client:
-        with st.spinner("讀取中..."):
-            df, msg = fetch_aus_raw_data(gs_client, race_num)
-        if df is not None:
-            st.session_state.aus_scoring_df = df
-            st.session_state.aus_scoring_page = 0
-            st.success(f"已讀取 {race_num}，共 {len(df)} 隻馬。")
+        if aus_is_dirty() and race_num != aus_loaded:
+            st.session_state.aus_pending_load = race_num
         else:
-            st.error(f"❌ {msg}")
+            aus_do_load(gs_client, race_num)
+            st.rerun()
+
+    aus_pending = st.session_state.get("aus_pending_load")
+    if aus_pending:
+        st.error(
+            f"⚠️ **{aus_loaded}** 仲有未儲存嘅標記。\n\n"
+            f"而家讀取 **{aus_pending}**，{aus_loaded} 嗰啲標記會即刻冇咗，救唔返。"
+        )
+        ac1, ac2, ac3 = st.columns(3)
+        with ac1:
+            if st.button(f"💾 先儲存返 {aus_loaded}", type="primary", use_container_width=True):
+                with st.spinner("儲存中..."):
+                    result = save_aus_scoring_progress(
+                        gs_client, aus_loaded, st.session_state.aus_scoring_df)
+                if result == "成功":
+                    st.session_state.aus_saved_snapshot = st.session_state.get("aus_current_snapshot")
+                    st.session_state.pop("aus_pending_load", None)
+                    aus_do_load(gs_client, aus_pending)
+                    st.rerun()
+                else:
+                    st.error(f"❌ 儲存失敗，冇讀取新一場: {result}")
+        with ac2:
+            if st.button("🗑️ 唔要嗰啲標記，照讀", use_container_width=True):
+                st.session_state.pop("aus_pending_load", None)
+                aus_do_load(gs_client, aus_pending)
+                st.rerun()
+        with ac3:
+            if st.button("↩️ 取消", use_container_width=True):
+                st.session_state.pop("aus_pending_load", None)
+                st.session_state.aus_race_num_persist = aus_loaded
+                st.rerun()
+        st.divider()
 
     if "aus_scoring_df" in st.session_state:
         df = st.session_state.aus_scoring_df
@@ -1734,6 +2066,19 @@ def aus_scoring_ui(gs_client):
 
             st.divider()
 
+        st.session_state.aus_current_snapshot = aus_snapshot(st.session_state.aus_scoring_df)
+        aus_save_target = st.session_state.get("aus_loaded_race") or race_num
+
+        if aus_save_target != race_num:
+            st.warning(
+                f"⚠️ 你而家填緊嘅係 **{aus_save_target}**，但上面個場次寫住 **{race_num}**。\n\n"
+                f"撳儲存只會寫入 **{aus_save_target}**。"
+            )
+        if aus_is_dirty():
+            st.info(f"📝 **{aus_save_target}** 有未儲存嘅標記")
+        else:
+            st.caption(f"✅ {aus_save_target} 已經同雲端一致")
+
         col_prev, col_next, col_save = st.columns(3)
         with col_prev:
             if st.button("⬅️ 上一組", use_container_width=True, disabled=(current_page == 0)):
@@ -1744,11 +2089,15 @@ def aus_scoring_ui(gs_client):
                 st.session_state.aus_scoring_page += 1
                 st.rerun()
         with col_save:
-            if st.button("💾 儲存去雲端", type="primary", use_container_width=True) and gs_client:
+            # ⚠️ 用 aus_save_target 而唔係 race_num，理由同英國嗰邊一樣
+            if st.button(f"💾 儲存（{aus_save_target}）", type="primary",
+                         use_container_width=True) and gs_client:
                 with st.spinner("儲存中..."):
-                    result = save_aus_scoring_progress(gs_client, race_num, st.session_state.aus_scoring_df)
+                    result = save_aus_scoring_progress(
+                        gs_client, aus_save_target, st.session_state.aus_scoring_df)
                 if result == "成功":
-                    st.success(f"已儲存 {race_num} 嘅入分進度！")
+                    st.session_state.aus_saved_snapshot = st.session_state.aus_current_snapshot
+                    st.success(f"已儲存 {aus_save_target} 嘅入分進度！")
                 else:
                     st.error(f"❌ 儲存失敗: {result}")
 
@@ -1762,6 +2111,14 @@ system_mode = st.radio(
     horizontal=True
 )
 st.divider()
+
+# 邊一頁有未儲存嘅嘢，就喺你而家所在嗰頁提醒你
+if system_mode != "🇬🇧 XX英國（入分）":
+    uk_unsaved_banner()
+if system_mode != "🇦🇺 澳洲（入分）":
+    aus_unsaved_banner()
+if system_mode != "📊 步速圖":
+    pace_unsaved_banner()
 
 if system_mode == "🇬🇧 XX英國（出圖）":
     st.subheader("🇬🇧 英國/本地系統")
