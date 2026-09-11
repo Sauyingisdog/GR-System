@@ -1541,7 +1541,7 @@ def pace_map_ui(gs_client):
 
 MEMO_TODAY_COLS = ["場", "號", "馬匹"]
 MEMO_LAST_COLS = ["名次", "總場", "班", "路程", "檔", "賠率",
-                  "步速", "偏差", "轉彎", "賽後"]
+                  "步速", "偏差", "轉彎", "賽後獸醫報告"]
 
 # ── 條件格式 ──
 # ⚠️ 呢啲色碼要同 Main Chart 嗰邊嘅條件格式對得返。改一邊記住改另一邊。
@@ -1707,6 +1707,22 @@ def memo_draw_style(value):
     return None
 
 
+def memo_format_odds(value):
+    """
+    賠率：10以下先出小數點（6.9、9.5），10或以上唔要（13、137）。
+    """
+    if value in (None, ""):
+        return ""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(n) >= 10:
+        return f"{n:.0f}"
+    text = f"{n:.1f}"
+    return text[:-2] if text.endswith(".0") else text
+
+
 def memo_odds_style(odds_category):
     """
     賠率底色跟返 Main Chart 嘅「#」欄。
@@ -1726,16 +1742,16 @@ def draw_memo_image(rows, race_no, date_str=""):
     """
     L = {
         # 加起嚟一定要等於畫布闊度（899）
-        #   偏差只會係「賺」／「蝕」一個字，轉彎最多三個字，所以收窄佢哋，
-        #   借位畀「賽後」—— 獸醫報告可以係「氣管有血 / 喘鳴」咁串幾個詞組。
-        "col_widths": [44, 40, 150,                                   # 場 號 馬匹
-                       52, 60, 44, 70, 44, 60, 76, 52, 64, 143],      # 上仗十欄
-        "band_h": 32,          # 「今仗資料 / 上仗備忘」嗰條
-        "header_h": 32,        # 欄名
-        "row_h": 37,
-        "font_size": 19,
-        "font_header": 18,
-        "font_band": 19,
+        #   馬匹欄收窄咗（四個字嘅馬名 130px 夠用），借位畀其餘欄位，
+        #   等字體可以大啲。偏差永遠只係一個字，轉彎最多三個字。
+        "col_widths": [46, 42, 130,                                   # 場 號 馬匹
+                       54, 64, 46, 76, 46, 64, 80, 54, 68, 129],      # 上仗十欄
+        "band_h": 34,          # 「今仗資料 / 上仗備忘」嗰條
+        "header_h": 34,        # 欄名
+        "row_h": 38,
+        "font_size": 21,
+        "font_header": 19,
+        "font_band": 21,
         "grid_color": "#b7b7b7",
         "section_line_color": "#000000",
         "pad": 6,
@@ -1810,9 +1826,14 @@ def draw_memo_image(rows, race_no, date_str=""):
             cells.append((row.get(name), None, "black"))
 
         if is_initial:
-            # 初出：成行米黃底，喺「名次」位寫「初出」，其餘留空
-            cells.append(("初出", None, "black"))
-            cells.extend([("", None, "black")] * (len(MEMO_LAST_COLS) - 1))
+            # 初出：上仗嗰十欄當成一格合併儲存格（冇間隔線），「初出」靠左。
+            # 逐欄畫線嘅話，一行空格睇落好似真係有十樣嘢冇填咗。
+            last_x = sum(widths[:n_today])
+            draw.rectangle([last_x, y, table_w, y + L["row_h"]],
+                           fill=row_bg, outline=L["grid_color"])
+            bbox = font_cell.getbbox("初出")
+            ty = y + (L["row_h"] - (bbox[3] - bbox[1])) / 2 - bbox[1]
+            draw.text((last_x + L["pad"] + 2, ty), "初出", fill="black", font=font_cell)
         else:
             place_fill, place_white = memo_place_style(last.get("名次"))
             cells.append((last.get("名次"), place_fill, "white" if place_white else "black"))
@@ -1826,7 +1847,8 @@ def draw_memo_image(rows, race_no, date_str=""):
             cells.append((last.get("檔"), memo_draw_style(last.get("檔")), "black"))
 
             odds_fill = memo_odds_style(last.get("_odds_cat"))
-            cells.append((last.get("賠率"), odds_fill, "white" if odds_fill else "black"))
+            cells.append((memo_format_odds(last.get("賠率")), odds_fill,
+                          "white" if odds_fill else "black"))
 
             for name in ("步速", "偏差", "轉彎", "賽後"):
                 value = last.get(name)
@@ -1839,7 +1861,7 @@ def draw_memo_image(rows, race_no, date_str=""):
                     cells.append((value, "#f4cccc", "black"))
 
         cxx = 0
-        for i, (value, fill, colour) in enumerate(cells):
+        for i, (value, fill, colour) in enumerate(cells):   # 初出行只得頭三欄
             text = "" if value is None else str(value)
             if fill:
                 draw.rectangle([cxx + 1, y + 1, cxx + widths[i] - 1, y + L["row_h"] - 1],
