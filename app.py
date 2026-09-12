@@ -1556,6 +1556,59 @@ MEMO_LOSE_FILL = "#f4cccc"          # 其餘有內容嘅：蝕快、3疊、獸�
 MEMO_BAND_TODAY = "#000000"
 MEMO_BAND_LAST = "#38761d"
 
+# ── 雨戰 / 夜泥成績（可選）──
+MEMO_RECORD_COLS = ["冠", "亞", "季", "殿", "負"]   # 負 = 落第（第五名或之後）
+MEMO_RECORD_SEASONS = ("2526", "2627")             # 「上季至今」
+MEMO_BAND_WET = "#38761d"
+MEMO_BAND_NIGHT = "#bf9000"
+MEMO_NO_RECORD_FILL = "#d9d9d9"    # 嗰個範疇一場都冇跑過 → 成組灰晒
+
+
+def fetch_memo_records(conn, brand_nos, date_str, flag_column):
+    """
+    數每隻馬喺指定範疇（雨戰／夜泥）嘅冠亞季殿負。
+
+    flag_column 只可以係 is_wet / is_night_dirt —— 直接插入SQL，
+    所以一定要 whitelist，唔可以由外面亂傳。
+
+    回傳 {brand_no: {"冠":n, "亞":n, "季":n, "殿":n, "負":n, "raced":n}}
+    raced = 0 即係嗰個範疇一場都冇跑過 → 出圖嗰陣成組灰。
+    """
+    if flag_column not in ("is_wet", "is_night_dirt"):
+        raise ValueError(f"唔認得嘅欄位：{flag_column}")
+    if not brand_nos:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            rf"""
+            select horse_brand_no,
+                   count(*) filter (where pos = 1) as c1,
+                   count(*) filter (where pos = 2) as c2,
+                   count(*) filter (where pos = 3) as c3,
+                   count(*) filter (where pos = 4) as c4,
+                   count(*) filter (where pos >= 5) as c5,
+                   count(*) as raced
+            from (
+                select horse_brand_no,
+                       nullif(substring(finish_position from '^\s*(\d+)'), '')::int as pos
+                from race_entries
+                where horse_brand_no = any(%s)
+                  and season = any(%s)
+                  and {flag_column} is true
+                  and race_date < %s
+                  and coalesce(pre_race_notes, '') not like '%%退出%%'
+            ) t
+            group by horse_brand_no
+            """,
+            (brand_nos, list(MEMO_RECORD_SEASONS), _memo_date_param(date_str)),
+        )
+        out = {}
+        for brand_no, c1, c2, c3, c4, c5, raced in cur.fetchall():
+            out[brand_no] = {"冠": c1, "亞": c2, "季": c3, "殿": c4, "負": c5,
+                             "raced": raced}
+    return out
+
 
 # Secrets 個 key 名。四個本機script用嘅環境變數叫 SUPABASE_DB_URL，
 # 所以兩個寫法都收，唔使你記住邊度用邊個大細楷。
@@ -1617,10 +1670,11 @@ def fetch_memo_race_numbers(date_str):
     return sorted(races, key=race_sort_key), "成功"
 
 
-def fetch_memo_rows(date_str, race_no):
+def fetch_memo_rows(date_str, race_no, want_wet=False, want_night=False):
     """
     回傳 (rows, msg)。每一行 = 一隻今仗出賽嘅馬 + 佢上仗嘅資料。
     冇上仗（初出）嘅話 last 會係 None。
+    want_wet / want_night 開咗先會查嗰兩組成績，唔開就唔查，慳返兩個query。
     """
     date_param = _memo_date_param(date_str)
     try:
@@ -1645,6 +1699,9 @@ def fetch_memo_rows(date_str, race_no):
                 return None, f"Supabase 冇 {date_str} {race_no} 嘅資料。請確認跑咗 04 prerace 同 02。"
 
             brand_nos = [r[3] for r in today_rows if r[3]]
+            wet_records = fetch_memo_records(conn, brand_nos, date_str, "is_wet") if want_wet else {}
+            night_records = (fetch_memo_records(conn, brand_nos, date_str, "is_night_dirt")
+                             if want_night else {})
             last_by_horse = {}
             if brand_nos:
                 cur.execute(
@@ -1681,6 +1738,8 @@ def fetch_memo_rows(date_str, race_no):
             "馬匹": strip_brand_no(horse_name),
             "_today_track": today_track,
             "last": last_by_horse.get(brand_no),
+            "wet": wet_records.get(brand_no),
+            "night": night_records.get(brand_no),
         })
     return rows, "成功"
 
@@ -1754,19 +1813,21 @@ def memo_odds_style(odds_category):
     return None
 
 
-def draw_memo_image(rows, race_no, date_str=""):
+def draw_memo_image(rows, race_no, date_str="", show_wet=False, show_night=False):
     """
-    畫一場嘅賽日備忘。冇底圖，畫布高度跟馬匹數目變。
+    畫一場嘅賽日備忘。冇底圖，畫布闊度同高度都跟內容變：
+      高度 = 兩條表頭 + 馬匹數
+      闊度 = 899（基本）+ 每開一組雨戰／夜泥成績加 150
+
     所有尺寸集中喺 L，想調就改呢度。
     """
     L = {
-        # 加起嚟一定要等於畫布闊度（899）
-        #   馬匹欄收窄咗（四個字嘅馬名 130px 夠用），借位畀其餘欄位，
-        #   等字體可以大啲。偏差永遠只係一個字，轉彎最多三個字。
+        # 基本十三欄，加起嚟 = 899
         "col_widths": [46, 42, 130,                                   # 場 號 馬匹
                        54, 64, 46, 76, 46, 64, 80, 54, 68, 129],      # 上仗十欄
-        "band_h": 34,          # 「今仗資料 / 上仗備忘」嗰條
-        "header_h": 34,        # 欄名
+        "record_col_width": 30,     # 冠亞季殿負每欄
+        "band_h": 34,
+        "header_h": 34,
         "row_h": 38,
         "font_size": 21,
         "font_header": 19,
@@ -1776,8 +1837,19 @@ def draw_memo_image(rows, race_no, date_str=""):
         "pad": 6,
     }
 
-    n_today = len(MEMO_TODAY_COLS)
-    widths = L["col_widths"]
+    # ── 砌返成個表有邊幾組欄 ──
+    sections = [
+        ("今仗資料", MEMO_TODAY_COLS, L["col_widths"][:len(MEMO_TODAY_COLS)], MEMO_BAND_TODAY),
+        ("上仗備忘", MEMO_LAST_COLS, L["col_widths"][len(MEMO_TODAY_COLS):], MEMO_BAND_LAST),
+    ]
+    rec_w = [L["record_col_width"]] * len(MEMO_RECORD_COLS)
+    if show_wet:
+        sections.append(("上季至今雨戰成績", MEMO_RECORD_COLS, rec_w, MEMO_BAND_WET))
+    if show_night:
+        sections.append(("上季至今夜泥成績", MEMO_RECORD_COLS, rec_w, MEMO_BAND_NIGHT))
+
+    widths = [w for _, _, ws, _ in sections for w in ws]
+    headers = [h for _, hs, _, _ in sections for h in hs]
     table_w = sum(widths)
     height = L["band_h"] + L["header_h"] + L["row_h"] * len(rows)
 
@@ -1813,25 +1885,41 @@ def draw_memo_image(rows, race_no, date_str=""):
         ty = top + (height_ - (bbox[3] - bbox[1])) / 2 - bbox[1]
         return tx, ty
 
-    # ── 兩條分類帶 ──
-    today_w = sum(widths[:n_today])
-    draw.rectangle([0, 0, today_w, L["band_h"]], fill=MEMO_BAND_TODAY)
-    draw.rectangle([today_w, 0, table_w, L["band_h"]], fill=MEMO_BAND_LAST)
-    for text, x0, w in (("今仗資料", 0, today_w), ("上仗備忘", today_w, table_w - today_w)):
-        tx, ty = centered(text, font_band, x0, w, 0, L["band_h"])
-        draw.text((tx, ty), text, fill="white", font=font_band)
+    # ── 分類帶 ──
+    section_bounds = []      # 每組嘅 (起點x, 終點x)      # 每組嘅 (起點x, 終點x)，畫粗線同灰色區都要用
+    cx = 0
+    for title, _, ws, colour in sections:
+        w = sum(ws)
+        draw.rectangle([cx, 0, cx + w, L["band_h"]], fill=colour)
+        # 雨戰／夜泥兩組得150px闊，但標題有七個字，一定要縮先塞得落
+        fnt = fit_font(title, w - 8, L["font_band"])
+        tx, ty = centered(title, fnt, cx, w, 0, L["band_h"])
+        draw.text((tx, ty), title, fill="white", font=fnt)
+        section_bounds.append((cx, cx + w))
+        cx += w
 
     # ── 欄名 ──
     y = L["band_h"]
-    headers = MEMO_TODAY_COLS + MEMO_LAST_COLS
     cx = 0
     for i, name in enumerate(headers):
         draw.rectangle([cx, y, cx + widths[i], y + L["header_h"]],
                        fill="white", outline=L["grid_color"])
-        tx, ty = centered(name, font_head, cx, widths[i], y, L["header_h"])
-        draw.text((tx, ty), name, fill="black", font=font_head)
+        fnt = fit_font(name, widths[i] - 4, L["font_header"])
+        tx, ty = centered(name, fnt, cx, widths[i], y, L["header_h"])
+        draw.text((tx, ty), name, fill="black", font=fnt)
         cx += widths[i]
     y += L["header_h"]
+
+    n_today = len(MEMO_TODAY_COLS)
+    n_base = n_today + len(MEMO_LAST_COLS)
+
+    def record_cells(record):
+        """冠亞季殿負：有數就寫，0 就留空（唔寫 0，一片零會好嘈）"""
+        out = []
+        for name in MEMO_RECORD_COLS:
+            value = (record or {}).get(name) or 0
+            out.append((str(value) if value else "", None, "black", False))
+        return out
 
     # ── 逐行 ──
     for row in rows:
@@ -1848,12 +1936,12 @@ def draw_memo_image(rows, race_no, date_str=""):
         if is_initial:
             # 初出：上仗嗰十欄當成一格合併儲存格（冇間隔線），「初出」靠左。
             # 逐欄畫線嘅話，一行空格睇落好似真係有十樣嘢冇填咗。
-            last_x = sum(widths[:n_today])
-            draw.rectangle([last_x, y, table_w, y + L["row_h"]],
-                           fill=row_bg, outline=L["grid_color"])
+            x0, x1 = section_bounds[1]
+            draw.rectangle([x0, y, x1, y + L["row_h"]], fill=row_bg,
+                           outline=L["grid_color"])
             bbox = font_cell.getbbox("初出")
             ty = y + (L["row_h"] - (bbox[3] - bbox[1])) / 2 - bbox[1]
-            draw.text((last_x + L["pad"] + 2, ty), "初出", fill="black", font=font_cell)
+            draw.text((x0 + L["pad"] + 2, ty), "初出", fill="black", font=font_cell)
         else:
             # 名次頭三名：反白字再加粗（PIL冇得synthesize粗體，用stroke扮）
             place_fill, place_white = memo_place_style(last.get("名次"))
@@ -1883,8 +1971,26 @@ def draw_memo_image(rows, race_no, date_str=""):
                 else:
                     cells.append((value, MEMO_LOSE_FILL, "black", False))
 
+        # 雨戰／夜泥：冇跑過就成組灰，唔會畫五個空格畀人以為係「跑過但零」
+        section_i = 2
+        for key, enabled in (("wet", show_wet), ("night", show_night)):
+            if not enabled:
+                continue
+            record = row.get(key)
+            if not record or not record.get("raced"):
+                x0, x1 = section_bounds[section_i]
+                draw.rectangle([x0, y, x1, y + L["row_h"]],
+                               fill=MEMO_NO_RECORD_FILL, outline=L["grid_color"])
+                cells.extend([(None, None, "black", None)] * len(MEMO_RECORD_COLS))
+            else:
+                cells.extend(record_cells(record))
+            section_i += 1
+
         cxx = 0
-        for i, (value, fill, colour, bold) in enumerate(cells):   # 初出行只得頭三欄
+        for i, (value, fill, colour, bold) in enumerate(cells):
+            if bold is None:        # 已經整組畫咗（初出／冇成績），唔好再畫格線
+                cxx += widths[i]
+                continue
             text = "" if value is None else str(value)
             if fill:
                 draw.rectangle([cxx + 1, y + 1, cxx + widths[i] - 1, y + L["row_h"] - 1],
@@ -1902,8 +2008,9 @@ def draw_memo_image(rows, race_no, date_str=""):
             cxx += widths[i]
         y += L["row_h"]
 
-    # 今仗 / 上仗 之間嗰條粗線
-    draw.line([today_w, 0, today_w, height], fill=L["section_line_color"], width=3)
+    # 每組之間嘅粗線
+    for x0, _ in section_bounds[1:]:
+        draw.line([x0, 0, x0, height], fill=L["section_line_color"], width=3)
     draw.rectangle([0, 0, table_w - 1, height - 1], outline=L["section_line_color"])
 
     return image
@@ -2930,6 +3037,15 @@ def memo_ui():
         st.write("")
         go = st.button("🖼️ 生成", type="primary", use_container_width=True)
 
+    # 兩組成績係可選，開咗先會查 —— 唔開就慳返兩個query。
+    col_w, col_n = st.columns(2)
+    show_wet = col_w.checkbox("🌧️ 加「上季至今雨戰成績」", key="memo_show_wet")
+    show_night = col_n.checkbox("🌙 加「上季至今夜泥成績」", key="memo_show_night")
+    if show_wet or show_night:
+        st.caption(f"統計範圍：{' + '.join(MEMO_RECORD_SEASONS)} 兩季，"
+                   f"今日之前。冠/亞/季/殿 = 頭四名，負 = 第五名或之後。"
+                   f"成組灰色 = 嗰個範疇一場都冇跑過。")
+
     if not go:
         return
     if not date_str.strip():
@@ -2950,14 +3066,16 @@ def memo_ui():
 
     images = {}
     for race_no in race_list:
-        rows, msg = fetch_memo_rows(date_str, race_no)
+        rows, msg = fetch_memo_rows(date_str, race_no,
+                                    want_wet=show_wet, want_night=show_night)
         if rows is None:
             st.warning(f"⚠️ {race_no}：{msg}")
             continue
 
         n_initial = sum(1 for r in rows if r.get("last") is None)
         try:
-            img = draw_memo_image(rows, race_no, date_str)
+            img = draw_memo_image(rows, race_no, date_str,
+                                  show_wet=show_wet, show_night=show_night)
         except Exception as e:
             st.error(f"❌ {race_no} 出圖失敗：{e}")
             continue
