@@ -2686,8 +2686,8 @@ def sifu_do_load(gs_client, race_name):
     snap = sifu_snapshot(no_bet, comment, settings)
     st.session_state.sifu_saved_snapshot = snap
     st.session_state.sifu_current_snapshot = snap
-    for k in ("sifu_no_bet_input", "sifu_comment_input"):
-        st.session_state.pop(k, None)
+    st.session_state.sifu_no_bet_current = no_bet
+    st.session_state.sifu_comment_current = comment
     flash(f"已讀取 {race_name}，{len(df)} 隻馬有pick。")
     return True
 
@@ -2720,8 +2720,8 @@ def sifu_scoring_ui(gs_client):
         with s1:
             if st.button(f"💾 先儲存返 {sifu_loaded}", type="primary", use_container_width=True):
                 result = save_sifu_meta(gs_client, sifu_loaded,
-                                        st.session_state.get("sifu_no_bet_input", ""),
-                                        st.session_state.get("sifu_comment_input", ""),
+                                        st.session_state.get("sifu_no_bet_current", ""),
+                                        st.session_state.get("sifu_comment_current", ""),
                                         st.session_state.get("sifu_settings", {}))
                 if result == "成功":
                     st.session_state.sifu_saved_snapshot = st.session_state.get("sifu_current_snapshot")
@@ -2776,17 +2776,35 @@ def sifu_scoring_ui(gs_client):
     # （pandas 預設 quicksort 唔穩定），所以要喺呢度定。
     groups = sifu_tie_groups(sifu_sort(df, initial, tie), initial)
     if groups:
-        st.markdown("**同分排序**（數字細嘅排前面）")
-        for label, horses in groups:
+        st.markdown("**同分排序**（撳箭咀調上落）")
+        # ⚠️ 以前用 number_input，個 +/- 掣好易撈亂：
+        #    「+」係加數字，但數字大 = 排後面，所以撳「+」其實係向下跌一名。
+        #    直接用▲▼就冇得誤會 —— 睇到嘅次序就係張圖嘅次序。
+        for gi, (label, horses) in enumerate(groups):
             st.caption(f"Rating {label}　—　{len(horses)} 隻同分")
-            gcols = st.columns(len(horses))
+            # 按而家顯示嘅次序重新編號，保持 1..n
             for i, horse in enumerate(horses):
-                with gcols[i]:
-                    tie[horse] = st.number_input(
-                        horse, min_value=1, max_value=len(horses),
-                        value=int(tie.get(horse, i + 1)), step=1,
-                        key=f"sifu_tie_{race_key}_{horse}"
-                    )
+                tie[horse] = i + 1
+
+            for i, horse in enumerate(horses):
+                c_name, c_up, c_down = st.columns([6, 1, 1])
+                c_name.markdown(f"**{i + 1}.**　{horse}")
+
+                if c_up.button("▲", key=f"sifu_up_{race_key}_{gi}_{i}",
+                               disabled=(i == 0), use_container_width=True,
+                               help="調上一位"):
+                    above = horses[i - 1]
+                    tie[horse], tie[above] = tie[above], tie[horse]
+                    st.session_state.sifu_settings = {"initial": initial, "tie": tie}
+                    st.rerun()
+
+                if c_down.button("▼", key=f"sifu_down_{race_key}_{gi}_{i}",
+                                 disabled=(i == len(horses) - 1), use_container_width=True,
+                                 help="調落一位"):
+                    below = horses[i + 1]
+                    tie[horse], tie[below] = tie[below], tie[horse]
+                    st.session_state.sifu_settings = {"initial": initial, "tie": tie}
+                    st.rerun()
 
     settings = {"initial": initial, "tie": tie}
     st.session_state.sifu_settings = settings
@@ -2799,17 +2817,23 @@ def sifu_scoring_ui(gs_client):
     st.dataframe(sifu_style_preview(display_df), use_container_width=True, hide_index=True)
 
     st.divider()
+    # ⚠️ widget個key跟住場次走。
+    #    以前用固定key再喺載入嗰陣pop，換場之後啲舊內容有時仲留喺度。
+    #    key入面加咗場次，換場就係一個全新widget，一定係新內容。
     no_bet_input = st.text_input(
         "No Bet 指數（只填數字，例如 5.5；出圖會自動變成 5.5/10）:",
         value=normalize_no_bet(st.session_state.get("sifu_no_bet", "")),
-        key="sifu_no_bet_input"
+        key=f"sifu_no_bet_input_{race_key}"
     )
     comment_input = st.text_area(
         "師妹的話:",
         value=st.session_state.get("sifu_comment", ""),
-        key="sifu_comment_input",
+        key=f"sifu_comment_input_{race_key}",
         height=180
     )
+    # 畀「先儲存返上一場」嗰條路攞返而家嘅內容（嗰度唔知個key叫咩）
+    st.session_state.sifu_no_bet_current = no_bet_input
+    st.session_state.sifu_comment_current = comment_input
 
     st.session_state.sifu_current_snapshot = sifu_snapshot(
         no_bet_input, comment_input, st.session_state.get("sifu_settings", {}))
@@ -2830,7 +2854,10 @@ def sifu_scoring_ui(gs_client):
                                     st.session_state.get("sifu_settings", {}))
         if result == "成功":
             st.session_state.sifu_saved_snapshot = st.session_state.sifu_current_snapshot
-            st.success(f"已儲存 {save_target}！")
+            # ⚠️ 一定要rerun：「📝 有未儲存嘅改動」嗰句喺呢個掣上面，
+            #    儲存嗰陣已經畫咗出嚟，唔重畫就要撳多次先變返「✅ 已經一致」。
+            flash(f"已儲存 {save_target}！")
+            st.rerun()
         else:
             st.error(f"❌ 儲存失敗: {result}")
 
@@ -3134,7 +3161,8 @@ def uk_scoring_ui(gs_client):
                 )
             if result == "成功":
                 st.session_state.uk_saved_snapshot = st.session_state.uk_current_snapshot
-                st.success(f"已儲存 {save_target} 嘅入分進度！")
+                flash(f"已儲存 {save_target} 嘅入分進度！")
+                st.rerun()
             else:
                 st.error(f"❌ 儲存失敗: {result}")
 
@@ -3351,7 +3379,8 @@ def aus_scoring_ui(gs_client):
                         gs_client, aus_save_target, st.session_state.aus_scoring_df)
                 if result == "成功":
                     st.session_state.aus_saved_snapshot = st.session_state.aus_current_snapshot
-                    st.success(f"已儲存 {aus_save_target} 嘅入分進度！")
+                    flash(f"已儲存 {aus_save_target} 嘅入分進度！")
+                    st.rerun()
                 else:
                     st.error(f"❌ 儲存失敗: {result}")
 
