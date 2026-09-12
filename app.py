@@ -1655,6 +1655,9 @@ def fetch_memo_rows(date_str, race_no):
                         pace_judgement, post_race_deviation, corner_note, vet_note
                     from race_entries
                     where horse_brand_no = any(%s) and race_date < %s
+                      -- 剔走退出場次（04 會喺Notes欄加「退出」）。
+                      -- psycopg2 用 %-formatting，所以 LIKE 入面嘅 % 要寫兩個。
+                      and coalesce(pre_race_notes, '') not like '%%退出%%'
                     order by horse_brand_no, race_date desc
                     """,
                     (brand_nos, date_param),
