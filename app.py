@@ -1559,8 +1559,11 @@ MEMO_BAND_LAST = "#38761d"
 # ── 雨戰 / 夜泥成績（可選）──
 MEMO_RECORD_COLS = ["冠", "亞", "季", "殿", "負"]   # 負 = 落第（第五名或之後）
 MEMO_RECORD_SEASONS = ("2526", "2627")             # 「上季至今」
-MEMO_BAND_WET = "#38761d"
-MEMO_BAND_NIGHT = "#bf9000"
+# 兩條標題直接用返 Main Chart 落色嗰兩隻色，一眼認得出對應關係
+MEMO_BAND_WET = "#cfe2f3"          # 同「掛牌」嘅雨戰底色一樣
+MEMO_BAND_WET_TEXT = "#0000ff"
+MEMO_BAND_NIGHT = "#f1c232"        # 同「欄」嘅夜泥底色一樣
+MEMO_BAND_NIGHT_TEXT = "#000000"
 MEMO_NO_RECORD_FILL = "#d9d9d9"    # 嗰個範疇一場都冇跑過 → 成組灰晒
 
 
@@ -1840,18 +1843,23 @@ def draw_memo_image(rows, race_no, date_str="", show_wet=False, show_night=False
     }
 
     # ── 砌返成個表有邊幾組欄 ──
+    # 每組 = (標題, 欄名, 欄闊, 標題底色, 標題字色)
     sections = [
-        ("今仗資料", MEMO_TODAY_COLS, L["col_widths"][:len(MEMO_TODAY_COLS)], MEMO_BAND_TODAY),
-        ("上仗備忘", MEMO_LAST_COLS, L["col_widths"][len(MEMO_TODAY_COLS):], MEMO_BAND_LAST),
+        ("今仗資料", MEMO_TODAY_COLS, L["col_widths"][:len(MEMO_TODAY_COLS)],
+         MEMO_BAND_TODAY, "white"),
+        ("上仗備忘", MEMO_LAST_COLS, L["col_widths"][len(MEMO_TODAY_COLS):],
+         MEMO_BAND_LAST, "white"),
     ]
     rec_w = [L["record_col_width"]] * len(MEMO_RECORD_COLS)
     if show_wet:
-        sections.append(("上季至今雨戰成績", MEMO_RECORD_COLS, rec_w, MEMO_BAND_WET))
+        sections.append(("上季至今雨戰成績", MEMO_RECORD_COLS, rec_w,
+                         MEMO_BAND_WET, MEMO_BAND_WET_TEXT))
     if show_night:
-        sections.append(("上季至今夜泥成績", MEMO_RECORD_COLS, rec_w, MEMO_BAND_NIGHT))
+        sections.append(("上季至今夜泥成績", MEMO_RECORD_COLS, rec_w,
+                         MEMO_BAND_NIGHT, MEMO_BAND_NIGHT_TEXT))
 
-    widths = [w for _, _, ws, _ in sections for w in ws]
-    headers = [h for _, hs, _, _ in sections for h in hs]
+    widths = [w for _, _, ws, _, _ in sections for w in ws]
+    headers = [h for _, hs, _, _, _ in sections for h in hs]
     table_w = sum(widths)
     height = L["band_h"] + L["header_h"] + L["row_h"] * len(rows)
 
@@ -1890,13 +1898,13 @@ def draw_memo_image(rows, race_no, date_str="", show_wet=False, show_night=False
     # ── 分類帶 ──
     section_bounds = []      # 每組嘅 (起點x, 終點x)      # 每組嘅 (起點x, 終點x)，畫粗線同灰色區都要用
     cx = 0
-    for title, _, ws, colour in sections:
+    for title, _, ws, fill_colour, text_colour in sections:
         w = sum(ws)
-        draw.rectangle([cx, 0, cx + w, L["band_h"]], fill=colour)
+        draw.rectangle([cx, 0, cx + w, L["band_h"]], fill=fill_colour)
         # 雨戰／夜泥兩組得150px闊，但標題有七個字，一定要縮先塞得落
         fnt = fit_font(title, w - 8, L["font_band"])
         tx, ty = centered(title, fnt, cx, w, 0, L["band_h"])
-        draw.text((tx, ty), title, fill="white", font=fnt)
+        draw.text((tx, ty), title, fill=text_colour, font=fnt)
         section_bounds.append((cx, cx + w))
         cx += w
 
