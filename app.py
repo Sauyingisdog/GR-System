@@ -1704,6 +1704,10 @@ def fetch_memo_rows(date_str, race_no, want_wet=False, want_night=False):
                              if want_night else {})
             last_by_horse = {}
             if brand_nos:
+                # ⚠️ SQL string 入面唔可以有孤零零嘅 %：psycopg2 用 %-formatting，
+                #    見到 % 就會當係參數佔位符，連 SQL 註解入面嘅都會中招
+                #    （會擲 "tuple index out of range"）。
+                #    所以 LIKE 嘅萬用字元要寫成 %% ，而且唔好喺SQL入面打 % 做說明。
                 cur.execute(
                     """
                     select distinct on (horse_brand_no)
@@ -1712,8 +1716,6 @@ def fetch_memo_rows(date_str, race_no, want_wet=False, want_night=False):
                         pace_judgement, post_race_deviation, corner_note, vet_note
                     from race_entries
                     where horse_brand_no = any(%s) and race_date < %s
-                      -- 剔走退出場次（04 會喺Notes欄加「退出」）。
-                      -- psycopg2 用 %-formatting，所以 LIKE 入面嘅 % 要寫兩個。
                       and coalesce(pre_race_notes, '') not like '%%退出%%'
                     order by horse_brand_no, race_date desc
                     """,
