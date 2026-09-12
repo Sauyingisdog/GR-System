@@ -1928,7 +1928,11 @@ MP_COL_HORSE = 54         # 馬匹
 MP_COL_DRAW = 55          # 檔
 MP_COL_GEAR = 56          # 配備
 MP_COL_RATING = 57        # Rating
+MP_COL_NOTES = 59         # Notes（mirror block 入面嘅「今場」Notes，例如 ss1 / ST3 / Dis2）
 MP_COL_PICK = 61          # Pick
+
+# Notes 淨係喺Streamlit畀分析師睇，唔會落圖 —— draw_sifu_image 個 fields 冇佢。
+SIFU_PREVIEW_ONLY_COLS = ["Notes"]
 
 # ── 條件格式（同Main Chart嗰邊嘅規則一一對應，改咗一邊記得改另一邊）──
 SIFU_GEAR_RED_TOKENS = ("1", "2", "-")   # 配備含任何一個就變紅
@@ -2003,6 +2007,7 @@ def fetch_sifu_picks(client, race_name):
             "檔": cell(row, MP_COL_DRAW),
             "配備": cell(row, MP_COL_GEAR),
             "Rating": cell(row, MP_COL_RATING),
+            "Notes": cell(row, MP_COL_NOTES),
         })
 
     if not order:
@@ -2790,6 +2795,7 @@ def sifu_scoring_ui(gs_client):
     st.session_state.sifu_display_df = display_df
 
     st.write(f"**預覽（{len(display_df)} 隻馬，按 Rating 由高至低）**")
+    st.caption("Notes 淨係喺呢度睇，唔會出現喺張圖度。")
     st.dataframe(sifu_style_preview(display_df), use_container_width=True, hide_index=True)
 
     st.divider()
