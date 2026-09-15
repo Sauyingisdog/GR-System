@@ -2494,11 +2494,23 @@ def get_person_photo(name):
     return None
 
 
+# 三個框各自可以「唔設」，出一句置中嘅字代替內容
+MEMBER_INTRO_NONE_TEXT = {
+    "horse": "本賽日不設馬匹推介",
+    "jockey": "本賽日不設騎師王推介",
+    "trainer": "本賽日不設練馬師王推介",
+}
+
+
 def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
-                         trainer_name, trainer_img):
+                        trainer_name, trainer_img,
+                        has_horse=True, has_jockey=True, has_trainer=True):
     """
     race_info: 例如 "第9場 11.繼往開來"
     jockey_img / trainer_img: PIL Image 物件 (可以係 None)
+
+    has_xxx=False 嘅話，嗰個框唔會出相同名，改為置中印
+    「本賽日不設XXX推介」。三個框可以獨立控制。
     """
     image = Image.open(template_path).convert("RGB")
     draw = ImageDraw.Draw(image)
@@ -2540,6 +2552,13 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
             "width": 175,
             "height": 175,
         },
+        # 「本賽日不設⋯⋯」用嘅設定（三個框共用）
+        "none_text": {
+            "font_size": 60,
+            "center_x": 500,
+            "max_width": 700,   # 圓角框入面可以用嘅闊度
+            "color": "black",
+        },
     }
 
     def load_font(size):
@@ -2574,24 +2593,49 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
         paste_y = int(center_y - height / 2)
         image.paste(resized, (paste_x, paste_y), mask)
 
+    none_cfg = CONFIG["none_text"]
+
+    def draw_none_text(key, center_y):
+        """喺框中央印「本賽日不設⋯⋯推介」，字太長會自動縮細"""
+        text = MEMBER_INTRO_NONE_TEXT[key]
+        size = none_cfg["font_size"]
+        font = load_font(size)
+        while size > 20 and font.getlength(text) > none_cfg["max_width"]:
+            size -= 2
+            font = load_font(size)
+        draw_centered_text(text, none_cfg["center_x"], center_y, font, none_cfg["color"])
+
     # ---- 1. 馬匹推介 ----
     cfg = CONFIG["race_info"]
-    font_race = load_font(cfg["font_size"])
-    draw_centered_text(race_info, cfg["center_x"], cfg["center_y"], font_race, cfg["color"])
+    if has_horse:
+        font_race = load_font(cfg["font_size"])
+        draw_centered_text(race_info, cfg["center_x"], cfg["center_y"], font_race, cfg["color"])
+    else:
+        draw_none_text("horse", cfg["center_y"])
 
+    # ---- 2. 騎師王 ----
     cfg_photo = CONFIG["jockey_photo"]
-    paste_photo(jockey_img, cfg_photo["center_x"], cfg_photo["center_y"], cfg_photo["width"], cfg_photo["height"])
-
     cfg_name = CONFIG["jockey_name"]
-    font_jockey_name = load_font(cfg_name["font_size"])
-    draw_left_text(jockey_name, cfg_name["x"], cfg_name["center_y"], font_jockey_name, cfg_name["color"])
+    if has_jockey:
+        paste_photo(jockey_img, cfg_photo["center_x"], cfg_photo["center_y"],
+                    cfg_photo["width"], cfg_photo["height"])
+        font_jockey_name = load_font(cfg_name["font_size"])
+        draw_left_text(jockey_name, cfg_name["x"], cfg_name["center_y"],
+                       font_jockey_name, cfg_name["color"])
+    else:
+        draw_none_text("jockey", cfg_name["center_y"])
 
+    # ---- 3. 練馬師王 ----
     cfg_photo2 = CONFIG["trainer_photo"]
-    paste_photo(trainer_img, cfg_photo2["center_x"], cfg_photo2["center_y"], cfg_photo2["width"], cfg_photo2["height"])
-
     cfg_name2 = CONFIG["trainer_name"]
-    font_trainer_name = load_font(cfg_name2["font_size"])
-    draw_left_text(trainer_name, cfg_name2["x"], cfg_name2["center_y"], font_trainer_name, cfg_name2["color"])
+    if has_trainer:
+        paste_photo(trainer_img, cfg_photo2["center_x"], cfg_photo2["center_y"],
+                    cfg_photo2["width"], cfg_photo2["height"])
+        font_trainer_name = load_font(cfg_name2["font_size"])
+        draw_left_text(trainer_name, cfg_name2["x"], cfg_name2["center_y"],
+                       font_trainer_name, cfg_name2["color"])
+    else:
+        draw_none_text("trainer", cfg_name2["center_y"])
 
     return image
 
@@ -2599,19 +2643,29 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
 def race_day_intro_ui():
     st.subheader("📢 會員賽日推介")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        race_num = st.text_input("場次 (例如 9):", value="9")
-    with col2:
-        horse_no = st.text_input("馬號 (例如 11):", value="11")
-
-    horse_name = st.text_input("馬名 (例如 繼往開來，最多4隻字):", value="", max_chars=4)
+    # ---- 馬匹推介 ----
+    has_horse = not st.checkbox("本賽日不設馬匹推介", key="intro_no_horse")
+    race_num = horse_no = horse_name = ""
+    if has_horse:
+        col1, col2 = st.columns(2)
+        with col1:
+            race_num = st.text_input("場次 (例如 9):", value="9")
+        with col2:
+            horse_no = st.text_input("馬號 (例如 11):", value="11")
+        horse_name = st.text_input("馬名 (例如 繼往開來，最多4隻字):", value="", max_chars=4)
 
     st.divider()
 
     # ---- 騎師 ----
-    jockey_source = st.radio("騎師來源：", ["在港現役騎師", "其他 (外訪騎師)"], horizontal=True, key="jockey_source")
-    if jockey_source == "在港現役騎師":
+    has_jockey = not st.checkbox("本賽日不設騎師王推介", key="intro_no_jockey")
+    jockey_name = ""
+    jockey_img = None
+    jockey_source = st.radio("騎師來源：", ["在港現役騎師", "其他 (外訪騎師)"],
+                             horizontal=True, key="jockey_source",
+                             disabled=not has_jockey)
+    if not has_jockey:
+        pass
+    elif jockey_source == "在港現役騎師":
         jockey_name = st.selectbox("揀騎師：", JOCKEY_LIST, key="jockey_select")
         jockey_img = get_person_photo(jockey_name)
         if jockey_img is None:
@@ -2624,8 +2678,15 @@ def race_day_intro_ui():
     st.divider()
 
     # ---- 練馬師 ----
-    trainer_source = st.radio("練馬師來源：", ["在港現役練馬師", "其他 (外訪練馬師)"], horizontal=True, key="trainer_source")
-    if trainer_source == "在港現役練馬師":
+    has_trainer = not st.checkbox("本賽日不設練馬師王推介", key="intro_no_trainer")
+    trainer_name = ""
+    trainer_img = None
+    trainer_source = st.radio("練馬師來源：", ["在港現役練馬師", "其他 (外訪練馬師)"],
+                              horizontal=True, key="trainer_source",
+                              disabled=not has_trainer)
+    if not has_trainer:
+        pass
+    elif trainer_source == "在港現役練馬師":
         trainer_name = st.selectbox("揀練馬師：", TRAINER_LIST, key="trainer_select")
         trainer_img = get_person_photo(trainer_name)
         if trainer_img is None:
@@ -2643,22 +2704,27 @@ def race_day_intro_ui():
             st.error("❌ 搵唔到底圖 `RaceDayIntro_Template.jpg`，請確保已經上傳到 GitHub！")
             return
 
-        if not horse_name:
+        # 只有「有設」嘅框先需要check內容
+        if has_horse and not horse_name:
             st.error("❌ 請輸入馬名！")
             return
-        if not jockey_name:
+        if has_jockey and not jockey_name:
             st.error("❌ 請輸入/選擇騎師！")
             return
-        if not trainer_name:
+        if has_trainer and not trainer_name:
             st.error("❌ 請輸入/選擇練馬師！")
             return
+        if not (has_horse or has_jockey or has_trainer):
+            st.error("❌ 三個都唔設嘅話，張圖就冇內容喇。")
+            return
 
-        race_info = f"第{race_num}場 {horse_no}.{horse_name}"
+        race_info = f"第{race_num}場 {horse_no}.{horse_name}" if has_horse else ""
 
         result_img = draw_race_day_intro(
             template_file, race_info,
             jockey_name, jockey_img,
-            trainer_name, trainer_img
+            trainer_name, trainer_img,
+            has_horse=has_horse, has_jockey=has_jockey, has_trainer=has_trainer
         )
 
         buf = io.BytesIO()
@@ -2669,7 +2735,8 @@ def race_day_intro_ui():
         st.download_button(
             "💾 下載圖片",
             data=byte_im,
-            file_name=f"RaceDayIntro_R{race_num}.png",
+            file_name=(f"RaceDayIntro_R{race_num}.png" if has_horse
+                       else "RaceDayIntro.png"),
             mime="image/png"
         )
 
