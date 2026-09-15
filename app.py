@@ -2736,10 +2736,8 @@ def race_day_intro_ui():
         if has_trainer and not trainer_name:
             st.error("❌ 請輸入/選擇練馬師！")
             return
-        if not (has_horse or has_jockey or has_trainer):
-            st.error("❌ 三個都唔設嘅話，張圖就冇內容喇。")
-            return
 
+        # 三個都唔設係容許嘅：出一張淨係寫住「不設推介」嘅圖。
         race_info = f"第{race_num}場 {horse_no}.{horse_name}" if has_horse else ""
 
         result_img = draw_race_day_intro(
