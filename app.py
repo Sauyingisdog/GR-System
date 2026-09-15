@@ -2501,6 +2501,11 @@ MEMBER_INTRO_NONE_TEXT = {
     "trainer": "本賽日不設練馬師王推介",
 }
 
+# 底圖第 2、3 個框本身已經印住「騎師王」「練馬師王」呢兩個標題。
+# 揀「不設」嗰陣如果照置中落字，就會同底圖嘅標題疊埋一齊（見 2026-09 個 bug）。
+# 所以呢兩個框要改為喺標題右邊嘅空位落短句。
+MEMBER_INTRO_LABELLED_BOXES = {"jockey", "trainer"}
+
 
 def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
                         trainer_name, trainer_img,
@@ -2552,12 +2557,17 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
             "width": 175,
             "height": 175,
         },
-        # 「本賽日不設⋯⋯」用嘅設定（三個框共用）
+        # 「本賽日不設⋯⋯」用嘅設定
         "none_text": {
             "font_size": 60,
-            "center_x": 500,
+            "center_x": 500,    # 第一個框（底圖冇印標題）用呢個，置中成個框
             "max_width": 700,   # 圓角框入面可以用嘅闊度
             "color": "black",
+            # 第 2、3 個框：底圖已經有「騎師王」／「練馬師王」，
+            # 所以短句擺喺標題右邊嘅空位。標題大約去到 x=370，框內右邊 x=878。
+            "beside_label_center_x": 635,
+            "beside_label_max_width": 470,
+            "beside_label_text": "本賽日不設推介",
         },
     }
 
@@ -2596,14 +2606,26 @@ def draw_race_day_intro(template_path, race_info, jockey_name, jockey_img,
     none_cfg = CONFIG["none_text"]
 
     def draw_none_text(key, center_y):
-        """喺框中央印「本賽日不設⋯⋯推介」，字太長會自動縮細"""
-        text = MEMBER_INTRO_NONE_TEXT[key]
+        """印「不設」嘅字，字太長會自動縮細。
+
+        第 2、3 個框底圖本身印住「騎師王」「練馬師王」，置中落字會疊字，
+        所以改為喺標題右邊嘅空位落短句（標題已經講咗係邊個，唔使再寫多次）。
+        """
+        if key in MEMBER_INTRO_LABELLED_BOXES:
+            text = none_cfg["beside_label_text"]
+            cx = none_cfg["beside_label_center_x"]
+            max_w = none_cfg["beside_label_max_width"]
+        else:
+            text = MEMBER_INTRO_NONE_TEXT[key]
+            cx = none_cfg["center_x"]
+            max_w = none_cfg["max_width"]
+
         size = none_cfg["font_size"]
         font = load_font(size)
-        while size > 20 and font.getlength(text) > none_cfg["max_width"]:
+        while size > 20 and font.getlength(text) > max_w:
             size -= 2
             font = load_font(size)
-        draw_centered_text(text, none_cfg["center_x"], center_y, font, none_cfg["color"])
+        draw_centered_text(text, cx, center_y, font, none_cfg["color"])
 
     # ---- 1. 馬匹推介 ----
     cfg = CONFIG["race_info"]
